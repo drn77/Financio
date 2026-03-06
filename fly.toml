@@ -1,12 +1,17 @@
+# fly.toml app configuration file generated for financio-api on 2026-03-06T09:26:02+01:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
 app = 'financio-api'
-primary_region = 'waw'
+primary_region = 'ams'
 
 [build]
   dockerfile = 'Dockerfile'
 
 [env]
-  NODE_ENV = 'production'
   BACKEND_PORT = '8080'
+  NODE_ENV = 'production'
 
 [http_service]
   internal_port = 8080
@@ -23,3 +28,5 @@ primary_region = 'waw'
 [[vm]]
   size = 'shared-cpu-1x'
   memory = '256mb'
+  cpus = 1
+  memory_mb = 256
