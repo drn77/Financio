@@ -1,4 +1,4 @@
-const CACHE_NAME = 'financio-v2';
+const CACHE_NAME = 'financio-v3';
 const STATIC_ASSETS = [
   '/manifest.json',
 ];
@@ -21,13 +21,25 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const { request } = event;
+  const url = new URL(request.url);
 
-  // Skip non-GET and API requests
-  if (request.method !== 'GET' || request.url.includes('/api/')) {
+  // Only cache static assets (images, fonts, css, js files)
+  // Never cache HTML pages or API requests
+  if (
+    request.method !== 'GET' ||
+    request.url.includes('/api/') ||
+    request.mode === 'navigate' ||
+    request.headers.get('accept')?.includes('text/html')
+  ) {
     return;
   }
 
-  // Network-first strategy: try network, fall back to cache
+  // Only cache files with known static extensions
+  const staticExts = /\.(js|css|svg|png|jpg|jpeg|ico|woff2?|ttf|json)$/;
+  if (!staticExts.test(url.pathname)) {
+    return;
+  }
+
   event.respondWith(
     fetch(request)
       .then((response) => {
