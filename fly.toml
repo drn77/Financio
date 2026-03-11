@@ -1,17 +1,12 @@
-# fly.toml app configuration file generated for financio-api on 2026-03-06T09:26:02+01:00
+# fly.toml app configuration file generated for financio on 2026-03-11T07:03:08Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'financio-api'
+app = 'financio'
 primary_region = 'ams'
 
 [build]
-  dockerfile = 'Dockerfile'
-
-[env]
-  BACKEND_PORT = '8080'
-  NODE_ENV = 'production'
 
 [http_service]
   internal_port = 8080
@@ -19,14 +14,10 @@ primary_region = 'ams'
   auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
-
-  [http_service.concurrency]
-    type = 'connections'
-    hard_limit = 100
-    soft_limit = 80
+  processes = ['app']
 
 [[vm]]
-  size = 'shared-cpu-1x'
-  memory = '256mb'
+  memory = '1gb'
+  cpu_kind = 'shared'
   cpus = 1
   memory_mb = 256
