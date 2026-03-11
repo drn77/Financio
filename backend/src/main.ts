@@ -56,7 +56,13 @@ async function bootstrap() {
     }),
   );
 
+  // Health check before global prefix so it's at /api/health
   app.setGlobalPrefix('api');
+
+  const httpAdapter = app.getHttpAdapter();
+  httpAdapter.get('/api/health', (_req: unknown, res: { status: (code: number) => { send: (body: string) => void } }) => {
+    res.status(200).send('ok');
+  });
 
   const port = process.env.BACKEND_PORT || 6001;
   await app.listen(port, '0.0.0.0');
