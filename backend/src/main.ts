@@ -60,7 +60,7 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
 
   const httpAdapter = app.getHttpAdapter();
-  httpAdapter.get('/api/health', (_req: unknown, res: { status: (code: number) => { send: (body: string) => void } }) => {
+  httpAdapter.get('/api/health', (_req: any, res: any) => {
     res.status(200).send('ok');
   });
 
