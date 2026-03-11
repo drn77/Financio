@@ -31,10 +31,16 @@ export function AuthProvider({ children }: Props) {
 
         if (session.authenticated && session.user) {
           setUser(session.user);
+        } else {
+          // Session expired — clear stale cookie
+          document.cookie = 'financio.sid=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+          setUser(null);
         }
       })
       .catch(() => {
-        // Session check failed — user is not authenticated
+        // Session check failed — clear stale cookie
+        document.cookie = 'financio.sid=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+        setUser(null);
       })
       .finally(() => {
         setIsLoading(false);
@@ -60,6 +66,7 @@ export function AuthProvider({ children }: Props) {
       // Ignore logout errors
     }
 
+    document.cookie = 'financio.sid=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
     setUser(null);
   }, []);
 
