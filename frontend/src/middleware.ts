@@ -13,13 +13,8 @@ export function middleware(request: NextRequest): NextResponse | undefined {
 
   const sessionCookie = request.cookies.get('financio.sid');
 
-  // Allow public paths
+  // Always allow public paths — client components handle auth redirects
   if (PUBLIC_PATHS.some((path) => pathname.startsWith(path))) {
-    // Redirect authenticated users away from login/register
-    if (sessionCookie) {
-      return NextResponse.redirect(new URL('/', request.url));
-    }
-
     return NextResponse.next();
   }
 
