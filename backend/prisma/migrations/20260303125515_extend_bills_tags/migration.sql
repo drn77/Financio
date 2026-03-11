@@ -65,3 +65,17 @@ ALTER TABLE "bill_tags" ADD CONSTRAINT "bill_tags_billId_fkey" FOREIGN KEY ("bil
 
 -- AddForeignKey
 ALTER TABLE "bill_tags" ADD CONSTRAINT "bill_tags_tagId_fkey" FOREIGN KEY ("tagId") REFERENCES "tags"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- Receipt Tags (moved from receipt_items_stores_budgets migration due to dependency on tags table)
+CREATE TABLE "receipt_tags" (
+    "id" TEXT NOT NULL,
+    "receiptId" TEXT NOT NULL,
+    "tagId" TEXT NOT NULL,
+
+    CONSTRAINT "receipt_tags_pkey" PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX "receipt_tags_receiptId_tagId_key" ON "receipt_tags"("receiptId", "tagId");
+
+ALTER TABLE "receipt_tags" ADD CONSTRAINT "receipt_tags_receiptId_fkey" FOREIGN KEY ("receiptId") REFERENCES "receipts"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "receipt_tags" ADD CONSTRAINT "receipt_tags_tagId_fkey" FOREIGN KEY ("tagId") REFERENCES "tags"("id") ON DELETE CASCADE ON UPDATE CASCADE;
