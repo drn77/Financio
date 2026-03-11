@@ -1,0 +1,11 @@
+export interface Props {
+  label: string;
+  type?: 'text' | 'email' | 'password';
+  placeholder?: string;
+  value: string;
+  onChange: (value: string) => void;
+  error?: string;
+  disabled?: boolean;
+  required?: boolean;
+  autoComplete?: string;
+}
