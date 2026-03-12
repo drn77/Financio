@@ -10,7 +10,7 @@ primary_region = 'ams'
   dockerfile = 'Dockerfile'
 
 [deploy]
-  release_command = 'npx prisma migrate deploy'
+  release_command = "sh -lc 'for i in 1 2 3; do npx prisma migrate deploy && exit 0; echo release_command retry $i; sleep 5; done; exit 1'"
 
 [env]
   BACKEND_PORT = '8080'
@@ -21,7 +21,7 @@ primary_region = 'ams'
   force_https = true
   auto_stop_machines = 'stop'
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
   [http_service.concurrency]
     type = 'connections'
