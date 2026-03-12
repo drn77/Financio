@@ -1,5 +1,4 @@
 const CACHE_NAME = 'financio-v4';
-const MAX_CACHE_AGE = 24 * 60 * 60 * 1000; // 24h
 const STATIC_ASSETS = [
   '/manifest.json',
 ];
@@ -38,6 +37,7 @@ self.addEventListener('fetch', (event) => {
   if (
     request.method !== 'GET' ||
     request.url.includes('/api/') ||
+    url.pathname.startsWith('/_next/') ||
     request.mode === 'navigate' ||
     request.headers.get('accept')?.includes('text/html')
   ) {
@@ -50,9 +50,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Don't use cache fallback for Next.js chunks — always prefer network
-  const isNextChunk = url.pathname.startsWith('/_next/');
-
   event.respondWith(
     fetch(request)
       .then((response) => {
@@ -62,12 +59,6 @@ self.addEventListener('fetch', (event) => {
         }
         return response;
       })
-      .catch(() => {
-        // For Next.js chunks, don't serve stale cache — let it fail so the app can reload
-        if (isNextChunk) {
-          return new Response('', { status: 504, statusText: 'Network error' });
-        }
-        return caches.match(request);
-      })
+      .catch(() => caches.match(request))
   );
 });

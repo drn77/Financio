@@ -32,30 +32,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <div className="flex min-h-screen items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4 text-center px-4">
           <p className="text-sm text-muted-foreground">
-            Nie udało się połączyć z serwerem.
+            Chwilowy problem z połączeniem z serwerem.
           </p>
           <div className="flex gap-2">
             <button
               onClick={retrySession}
               className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
             >
-              Spróbuj ponownie
-            </button>
-            <button
-              onClick={() => {
-                // Clear all caches and reload
-                if ('serviceWorker' in navigator) {
-                  navigator.serviceWorker.getRegistrations().then((regs) =>
-                    regs.forEach((r) => r.unregister())
-                  );
-                }
-                caches.keys().then((keys) => keys.forEach((k) => caches.delete(k)));
-                document.cookie = 'financio.sid=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-                window.location.reload();
-              }}
-              className="rounded-md border px-4 py-2 text-sm font-medium hover:bg-accent"
-            >
-              Wyczyść cache
+              Ponów połączenie
             </button>
           </div>
         </div>
