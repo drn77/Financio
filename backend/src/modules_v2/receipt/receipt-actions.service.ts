@@ -54,6 +54,10 @@ export class ReceiptActionsService {
     billId?: string;
     imageUrl?: string;
     notes?: string;
+    ocrStatus?: 'PENDING' | 'COMPLETED' | 'FAILED';
+    ocrError?: string;
+    isApproved?: boolean;
+    approvedAt?: Date;
     items?: { name: string; quantity?: number; unitPrice: number; total: number; categoryId?: string }[];
     tagIds?: string[];
   }) {
@@ -71,6 +75,10 @@ export class ReceiptActionsService {
         billId: input.billId,
         imageUrl: input.imageUrl,
         notes: input.notes,
+        ocrStatus: (input.ocrStatus as any) ?? undefined,
+        ocrError: input.ocrError,
+        isApproved: input.isApproved,
+        approvedAt: input.approvedAt,
         items: input.items && input.items.length > 0 ? {
           create: input.items.map((item) => ({
             name: item.name,
@@ -246,6 +254,10 @@ export class ReceiptActionsService {
     billId?: string;
     imageUrl?: string;
     notes?: string;
+    ocrStatus?: 'PENDING' | 'COMPLETED' | 'FAILED';
+    ocrError?: string | null;
+    isApproved?: boolean;
+    approvedAt?: Date | null;
     items?: { name: string; quantity?: number; unitPrice: number; total: number; categoryId?: string }[];
     tagIds?: string[];
   }) {
@@ -261,6 +273,10 @@ export class ReceiptActionsService {
     if (input.billId !== undefined) data.billId = input.billId;
     if (input.imageUrl !== undefined) data.imageUrl = input.imageUrl;
     if (input.notes !== undefined) data.notes = input.notes;
+    if (input.ocrStatus !== undefined) data.ocrStatus = input.ocrStatus;
+    if (input.ocrError !== undefined) data.ocrError = input.ocrError;
+    if (input.isApproved !== undefined) data.isApproved = input.isApproved;
+    if (input.approvedAt !== undefined) data.approvedAt = input.approvedAt;
 
     // If items are provided, replace all items
     if (input.items !== undefined) {
@@ -307,16 +323,14 @@ export class ReceiptActionsService {
   // #endregion
 
   // #region Misc
-  async cleanupExpiredReceiptImages(maxAgeDays = 30) {
+  async cleanupExpiredReceipts(maxAgeDays = 30) {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - maxAgeDays);
 
-    const result = await this.prisma.receipt.updateMany({
+    const result = await this.prisma.receipt.deleteMany({
       where: {
         createdAt: { lt: cutoff },
-        imageUrl: { startsWith: 'data:' },
       },
-      data: { imageUrl: null },
     });
 
     return { cleaned: result.count };

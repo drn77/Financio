@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback } from 'react';
 import { Camera, Upload, Loader2, CheckCircle2, XCircle, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { toastError } from '@/lib/toast';
 
 
 export interface ParsedReceiptItem {
@@ -288,6 +289,7 @@ export function ReceiptScanner({ onResult, onCancel }: ReceiptScannerProps) {
         onResult({ ...parsed, imageData: compressed });
       } catch (err) {
         console.error('OCR error:', err);
+        toastError('Błąd podczas skanowania paragonu. Spróbuj ponownie.');
         setError('Błąd podczas skanowania. Spróbuj ponownie.');
         setStage('error');
       }

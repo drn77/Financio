@@ -1,4 +1,5 @@
-const CACHE_NAME = 'financio-v3';
+const CACHE_NAME = 'financio-v4';
+const MAX_CACHE_AGE = 24 * 60 * 60 * 1000; // 24h
 const STATIC_ASSETS = [
   '/manifest.json',
 ];
@@ -17,6 +18,15 @@ self.addEventListener('activate', (event) => {
     )
   );
   self.clients.claim();
+});
+
+// Listen for manual cache clear messages from the app
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'CLEAR_CACHE') {
+    caches.keys().then((keys) =>
+      Promise.all(keys.map((k) => caches.delete(k)))
+    );
+  }
 });
 
 self.addEventListener('fetch', (event) => {
@@ -40,6 +50,9 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Don't use cache fallback for Next.js chunks — always prefer network
+  const isNextChunk = url.pathname.startsWith('/_next/');
+
   event.respondWith(
     fetch(request)
       .then((response) => {
@@ -49,6 +62,12 @@ self.addEventListener('fetch', (event) => {
         }
         return response;
       })
-      .catch(() => caches.match(request))
+      .catch(() => {
+        // For Next.js chunks, don't serve stale cache — let it fail so the app can reload
+        if (isNextChunk) {
+          return new Response('', { status: 504, statusText: 'Network error' });
+        }
+        return caches.match(request);
+      })
   );
 });

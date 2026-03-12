@@ -53,11 +53,15 @@ model User {
 // ─── Family ───────────────────────────────────────────
 
 model Family {
-  id        String   @id @default(uuid())
-  name      String
-  currency  String   @default("PLN")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String   @id @default(uuid())
+  name        String
+  currency    String   @default("PLN")
+  tagMappings Json?    @default("{}") // Maps app functions to tag IDs: { income?: string, expense?: string, planning?: string, costs?: string }
+  taxConfig   Json?    @default("{}") // Tax calculator config (form, rates, toggles)
+  kanbanConfig Json?   @default("{}") // Kanban board columns and tag mappings
+  dashboardConfig Json? @default("{}") // Dashboard settings (e.g. categoryFieldId)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   members       FamilyMember[]
   categories    Category[]
@@ -266,6 +270,10 @@ model Receipt {
   personId    String?
   imageUrl    String?
   notes       String?
+  ocrStatus   ReceiptOcrStatus @default(COMPLETED)
+  ocrError    String?
+  isApproved  Boolean  @default(false)
+  approvedAt  DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -277,6 +285,12 @@ model Receipt {
 
   @@index([familyId, date])
   @@map("receipts")
+}
+
+enum ReceiptOcrStatus {
+  PENDING
+  COMPLETED
+  FAILED
 }
 
 model ReceiptItem {
@@ -368,8 +382,12 @@ model FixedExpense {
   dayOfMonth Int?
   startDate  DateTime
   endDate    DateTime?
+  nextDueDate DateTime?
+  lastPaidAt  DateTime?
   categoryId String?
   personId   String?
+  paymentTagId String?
+  paymentTemplateData Json? // Additional template-record payload to merge on "Pay"
   notes      String?
   isActive   Boolean   @default(true)
   createdAt  DateTime  @default(now())

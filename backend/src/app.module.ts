@@ -15,6 +15,8 @@ import { TagModule } from './modules_v2/tag/tag.module';
 import { StoreModule } from './modules_v2/store/store.module';
 import { BudgetModule } from './modules_v2/budget/budget.module';
 import { EventModule } from './modules_v2/event/event.module';
+import { TaxModule } from './modules_v2/tax/tax.module';
+import { KanbanModule } from './modules_v2/kanban/kanban.module';
 import { CsrfMiddleware } from './shared/middleware/csrf.middleware';
 
 @Module({
@@ -38,6 +40,8 @@ import { CsrfMiddleware } from './shared/middleware/csrf.middleware';
     FixedExpenseModule,
     SavingsModule,
     DashboardModule,
+    TaxModule,
+    KanbanModule,
   ],
 })
 export class AppModule implements NestModule {

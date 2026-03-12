@@ -15,6 +15,45 @@ export class BillContextService {
   ) {}
 
   // #region Private
+  private _extractTemplateColumns(templateColumns: any): { id: string; type?: string; tagGroupId?: string }[] {
+    return Array.isArray(templateColumns)
+      ? templateColumns.filter((c: any) => c && typeof c.id === 'string')
+      : [];
+  }
+
+  private _buildAutoExpenseData(
+    templateColumnsRaw: any,
+    bill: any,
+    payment: { id: string },
+    input: PayBillDto,
+  ): Record<string, any> {
+    const columns = this._extractTemplateColumns(templateColumnsRaw);
+    const data: Record<string, any> = {
+      col_date: new Date().toISOString().split('T')[0],
+      col_amount: { amount: input.amount, currency: (bill as any).currency ?? 'PLN' },
+      col_description: bill.name,
+      col_paid: true,
+      _billId: bill.id,
+      _billPaymentId: payment.id,
+      _billPaymentDueDate: new Date(input.dueDate).toISOString().split('T')[0],
+      _billName: bill.name,
+    };
+
+    const tagGroupColumns = columns.filter((c) => c.type === 'tag_group' && typeof c.tagGroupId === 'string');
+    const billTags = Array.isArray((bill as any)?.tags) ? (bill as any).tags : [];
+
+    for (const column of tagGroupColumns) {
+      const selectedTagNames = billTags
+        .filter((bt: any) => bt?.tag?.tagGroupId === column.tagGroupId)
+        .map((bt: any) => bt?.tag?.name)
+        .filter((name: any) => typeof name === 'string');
+
+      data[column.id] = selectedTagNames;
+    }
+
+    return data;
+  }
+
   private _computeNextDueDate(dueDay: number, frequency: string): Date {
     const now = new Date();
     const currentMonth = new Date(now.getFullYear(), now.getMonth(), dueDay);
@@ -74,13 +113,14 @@ export class BillContextService {
   }
 
   private _mapBill(bill: any) {
+    const { categoryId: _unusedCategoryId, ...billWithoutCategory } = bill;
     const billAmount = Number(bill.amount);
     const paidAmount = this._getPaidAmountForCurrentMonth(bill.payments);
     const isPaidThisMonth = paidAmount >= billAmount;
     const paymentStats = this._computePaymentStats(bill.payments);
 
     return {
-      ...bill,
+      ...billWithoutCategory,
       amount: billAmount,
       budgetLimit: bill.budgetLimit ? Number(bill.budgetLimit) : null,
       payments: bill.payments.map((p: any) => ({
@@ -113,7 +153,6 @@ export class BillContextService {
       currency: input.currency,
       dueDay: input.dueDay,
       frequency: input.frequency,
-      categoryId: input.categoryId,
       notes: input.notes,
       paymentType: input.paymentType,
       autoCreateExpense: input.autoCreateExpense,
@@ -146,20 +185,11 @@ export class BillContextService {
 
         if (defaultTemplate) {
           const maxSort = await this.recordActions.getMaxSortOrder(defaultTemplate.id);
-          const categoryName = (bill as any).category?.name ?? '';
+          const autoExpenseData = this._buildAutoExpenseData(defaultTemplate.columns, bill, payment, input);
 
           await this.recordActions.createRecord({
             templateId: defaultTemplate.id,
-            data: {
-              col_date: new Date().toISOString().split('T')[0],
-              col_type: 'Wydatek',
-              col_category: categoryName ? [categoryName] : [],
-              col_amount: { amount: input.amount, currency: (bill as any).currency ?? 'PLN' },
-              col_person: '',
-              col_paid: true,
-              _billId: billId,
-              _billName: bill.name,
-            },
+            data: autoExpenseData,
             sortOrder: maxSort + 1,
           });
         }
@@ -231,7 +261,6 @@ export class BillContextService {
       currency: input.currency,
       dueDay: input.dueDay,
       frequency: input.frequency,
-      categoryId: input.categoryId,
       notes: input.notes,
       isActive: input.isActive,
       paymentType: input.paymentType,
@@ -262,6 +291,33 @@ export class BillContextService {
 
     if (!bill) {
       throw new NotFoundException('Bill not found');
+    }
+
+    const payment = await this.billActions.findBillPaymentById(paymentId, billId);
+
+    if (!payment) {
+      throw new NotFoundException('Payment not found');
+    }
+
+    // Remove auto-created expense record linked to this bill payment (new linkage path).
+    const removedByPaymentId = await this.recordActions.deleteAutoExpenseRecordsByBillPaymentId(
+      familyId,
+      paymentId,
+    );
+
+    // Backward compatibility for older auto-created records that predate _billPaymentId linkage.
+    if (removedByPaymentId === 0) {
+      const paymentDate = new Date(payment.paidAt).toISOString().split('T')[0];
+      const fallbackCandidates = await this.recordActions.findAutoExpenseRecordCandidates(
+        familyId,
+        billId,
+        Number(payment.amount),
+        paymentDate,
+      );
+
+      if (fallbackCandidates.length > 0) {
+        await this.recordActions.deleteRecord(fallbackCandidates[0].id);
+      }
     }
 
     await this.billActions.deleteBillPayment(paymentId, billId);

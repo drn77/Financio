@@ -50,10 +50,6 @@ export class UpdateBillDto {
 
   @IsOptional()
   @IsString()
-  categoryId?: string;
-
-  @IsOptional()
-  @IsString()
   notes?: string;
 
   @IsOptional()

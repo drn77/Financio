@@ -18,8 +18,11 @@ export class FixedExpenseActionsService {
     dayOfMonth?: number;
     startDate: Date;
     endDate?: Date;
+    nextDueDate?: Date;
     categoryId?: string;
     personId?: string;
+    paymentTagId?: string;
+    paymentTemplateData?: Record<string, unknown>;
     notes?: string;
   }) {
     return this.prisma.fixedExpense.create({
@@ -32,8 +35,11 @@ export class FixedExpenseActionsService {
         dayOfMonth: input.dayOfMonth,
         startDate: input.startDate,
         endDate: input.endDate,
+        nextDueDate: input.nextDueDate,
         categoryId: input.categoryId,
         personId: input.personId,
+        paymentTagId: input.paymentTagId,
+        paymentTemplateData: input.paymentTemplateData as any,
         notes: input.notes,
       },
     });
@@ -64,8 +70,12 @@ export class FixedExpenseActionsService {
     dayOfMonth?: number;
     startDate?: Date;
     endDate?: Date;
+    nextDueDate?: Date;
+    lastPaidAt?: Date;
     categoryId?: string;
     personId?: string;
+    paymentTagId?: string;
+    paymentTemplateData?: Record<string, unknown>;
     notes?: string;
     isActive?: boolean;
   }) {
@@ -78,8 +88,12 @@ export class FixedExpenseActionsService {
     if (input.dayOfMonth !== undefined) data.dayOfMonth = input.dayOfMonth;
     if (input.startDate !== undefined) data.startDate = input.startDate;
     if (input.endDate !== undefined) data.endDate = input.endDate;
+    if (input.nextDueDate !== undefined) data.nextDueDate = input.nextDueDate;
+    if (input.lastPaidAt !== undefined) data.lastPaidAt = input.lastPaidAt;
     if (input.categoryId !== undefined) data.categoryId = input.categoryId;
     if (input.personId !== undefined) data.personId = input.personId;
+    if (input.paymentTagId !== undefined) data.paymentTagId = input.paymentTagId;
+    if (input.paymentTemplateData !== undefined) data.paymentTemplateData = input.paymentTemplateData as any;
     if (input.notes !== undefined) data.notes = input.notes;
     if (input.isActive !== undefined) data.isActive = input.isActive;
 

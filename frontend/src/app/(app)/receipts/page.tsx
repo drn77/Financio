@@ -1,7 +1,9 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { api } from '@/lib/api';
+import { toastError, toastSuccess } from '@/lib/toast';
+import { compressImage, fileToDataUrl, runReceiptOcr } from '@/lib/receipt-ocr';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -69,8 +71,8 @@ import {
   X,
   ImageIcon,
   FileText,
+  Loader2,
 } from 'lucide-react';
-import { ReceiptScanner, type ParsedReceipt } from '@/components/ReceiptScanner';
 import type { IReceipt, IReceiptStats } from '@shared/models';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -81,6 +83,23 @@ function formatPLN(amount: number) {
 
 function formatDate(date: string) {
   return new Date(date).toLocaleDateString('pl-PL');
+}
+
+function isPdfDataUrl(value?: string | null) {
+  return typeof value === 'string' && value.startsWith('data:application/pdf');
+}
+
+function receiptStatusLabel(receipt: IReceipt): { label: string; className: string } {
+  if (receipt.ocrStatus === 'PENDING') {
+    return { label: 'Przetwarzanie OCR', className: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300' };
+  }
+  if (receipt.ocrStatus === 'FAILED') {
+    return { label: 'OCR nieudany', className: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' };
+  }
+  if (receipt.isApproved) {
+    return { label: 'Zatwierdzony', className: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' };
+  }
+  return { label: 'Wymaga zatwierdzenia', className: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' };
 }
 
 // ─── Types ──────────────────────────────────────────
@@ -111,9 +130,11 @@ function ReceiptFormDialog({ open, onOpenChange, receipt, categories, stores, me
   const [storeId, setStoreId] = useState('');
   const [notes, setNotes] = useState('');
   const [imageUrl, setImageUrl] = useState('');
-  const [autoCreateExpense, setAutoCreateExpense] = useState(false);
   const [items, setItems] = useState<{ name: string; quantity: number; unitPrice: number; total: number; categoryId?: string }[]>([]);
   const [saving, setSaving] = useState(false);
+  const [processingBackgroundScan, setProcessingBackgroundScan] = useState(false);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
@@ -131,18 +152,86 @@ function ReceiptFormDialog({ open, onOpenChange, receipt, categories, stores, me
       } else {
         setDescription(''); setAmount(''); setDate(new Date().toISOString().split('T')[0]);
         setCategoryId(''); setPersonId(''); setStoreId(''); setNotes('');
-        setImageUrl(''); setItems([]); setMode('manual'); setAutoCreateExpense(false);
+        setImageUrl(''); setItems([]); setMode('manual');
       }
     }
   }, [open, receipt]);
 
-  const handleReceiptScanned = (parsed: ParsedReceipt) => {
-    setDescription(parsed.storeName ?? '');
-    setAmount(String(parsed.total));
-    if (parsed.date) setDate(parsed.date);
-    if (parsed.imageData) setImageUrl(parsed.imageData);
-    setItems(parsed.items.map(i => ({ name: i.name, quantity: i.quantity, unitPrice: i.unitPrice, total: i.total })));
-    setMode('manual');
+  const handleBackgroundScan = async (file?: File | null) => {
+    if (!file || processingBackgroundScan) return;
+
+    const today = new Date().toISOString().split('T')[0];
+    const fallbackDescription = file.name?.replace(/\.[^.]+$/, '') || 'Paragon';
+    const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+    setProcessingBackgroundScan(true);
+
+    try {
+      const rawDataUrl = await fileToDataUrl(file);
+      const filePayload = isPdf ? rawDataUrl : await compressImage(rawDataUrl);
+      onOpenChange(false);
+
+      const receiptCreated = await api.createReceipt({
+        description: fallbackDescription,
+        amount: 0,
+        currency: 'PLN',
+        date: today,
+        imageUrl: filePayload,
+        ocrStatus: isPdf ? 'FAILED' : 'PENDING',
+        ocrError: isPdf ? 'Plik PDF został dodany. Uzupełnij dane ręcznie.' : undefined,
+        isApproved: false,
+      }, { notifySuccess: false });
+
+      window.dispatchEvent(new Event('financio:summary-refresh'));
+      window.dispatchEvent(new Event('financio:receipts-refresh'));
+      if (isPdf) {
+        toastSuccess('Paragon PDF dodany. Uzupełnij dane ręcznie.');
+      } else {
+        toastSuccess('Paragon dodany. Trwa przetwarzanie OCR w tle.');
+      }
+
+      if (isPdf) {
+        onSaved();
+        return;
+      }
+
+      try {
+        const parsed = await runReceiptOcr(file);
+        const hasUsefulData = parsed.total > 0 || parsed.items.length > 0 || !!parsed.storeName;
+
+        if (!hasUsefulData) {
+          await api.updateReceipt(receiptCreated.id, {
+            ocrStatus: 'FAILED',
+            ocrError: 'Nie udało się odczytać danych z OCR.',
+            notes: parsed.rawText?.slice(0, 2000) || undefined,
+          }, { notifySuccess: false, suppressErrorToast: true });
+        } else {
+          await api.updateReceipt(receiptCreated.id, {
+            description: parsed.storeName || fallbackDescription,
+            amount: parsed.total > 0 ? parsed.total : 0,
+            date: parsed.date || today,
+            items: parsed.items,
+            notes: parsed.rawText?.slice(0, 2000) || undefined,
+            ocrStatus: 'COMPLETED',
+            ocrError: null,
+          }, { notifySuccess: false, suppressErrorToast: true });
+        }
+      } catch (ocrError) {
+        console.error('Background OCR failed:', ocrError);
+        await api.updateReceipt(receiptCreated.id, {
+          ocrStatus: 'FAILED',
+          ocrError: 'Błąd podczas OCR. Uzupełnij dane ręcznie.',
+        }, { notifySuccess: false, suppressErrorToast: true });
+      }
+
+      window.dispatchEvent(new Event('financio:summary-refresh'));
+      window.dispatchEvent(new Event('financio:receipts-refresh'));
+      onSaved();
+    } catch (e) {
+      console.error(e);
+      toastError('Nie udało się uruchomić skanowania paragonu.');
+    } finally {
+      setProcessingBackgroundScan(false);
+    }
   };
 
   const handleSave = async () => {
@@ -159,7 +248,6 @@ function ReceiptFormDialog({ open, onOpenChange, receipt, categories, stores, me
         notes: notes || undefined,
         imageUrl: imageUrl || undefined,
         items: items.length > 0 ? items : undefined,
-        autoCreateExpense: autoCreateExpense || undefined,
       };
 
       if (receipt) {
@@ -209,7 +297,42 @@ function ReceiptFormDialog({ open, onOpenChange, receipt, categories, stores, me
         )}
 
         {mode === 'scanner' ? (
-          <ReceiptScanner onResult={handleReceiptScanned} onCancel={() => setMode('manual')} />
+          <div className="space-y-4 py-2">
+            <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+              Po zrobieniu zdjęcia okno zamknie się natychmiast, a OCR będzie kontynuowany w tle.
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <Button className="h-11 gap-2" onClick={() => cameraInputRef.current?.click()} disabled={processingBackgroundScan}>
+                {processingBackgroundScan ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
+                Aparat
+              </Button>
+              <Button variant="outline" className="h-11 gap-2" onClick={() => galleryInputRef.current?.click()} disabled={processingBackgroundScan}>
+                {processingBackgroundScan ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />}
+                Galeria
+              </Button>
+            </div>
+
+            <input
+              ref={cameraInputRef}
+              type="file"
+              accept="image/*,.pdf,application/pdf"
+              capture="environment"
+              className="hidden"
+              onChange={(e) => void handleBackgroundScan(e.target.files?.[0])}
+            />
+            <input
+              ref={galleryInputRef}
+              type="file"
+              accept="image/*,.pdf,application/pdf"
+              className="hidden"
+              onChange={(e) => void handleBackgroundScan(e.target.files?.[0])}
+            />
+
+            <Button variant="ghost" onClick={() => setMode('manual')}>
+              Przejdź do formularza ręcznego
+            </Button>
+          </div>
         ) : (
           <div className="space-y-4">
             {/* Basic fields */}
@@ -277,8 +400,20 @@ function ReceiptFormDialog({ open, onOpenChange, receipt, categories, stores, me
             {imageUrl && (
               <div className="relative">
                 <Label>Zdjęcie paragonu</Label>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={imageUrl} alt="Paragon" className="max-h-48 rounded-lg border object-contain mt-1" />
+                {isPdfDataUrl(imageUrl) ? (
+                  <a
+                    href={imageUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-1 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm text-primary hover:bg-accent/60"
+                  >
+                    <FileText className="h-4 w-4" />
+                    Otwórz podgląd PDF
+                  </a>
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={imageUrl} alt="Paragon" className="max-h-48 rounded-lg border object-contain mt-1" />
+                )}
                 <Button variant="ghost" size="icon" className="absolute top-0 right-0" onClick={() => setImageUrl('')}>
                   <X className="h-4 w-4" />
                 </Button>
@@ -324,14 +459,6 @@ function ReceiptFormDialog({ open, onOpenChange, receipt, categories, stores, me
               )}
             </div>
 
-            {/* Auto-expense toggle */}
-            {!receipt && (
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={autoCreateExpense} onChange={e => setAutoCreateExpense(e.target.checked)} className="rounded" />
-                <span className="text-sm">Automatycznie utwórz wydatek</span>
-              </label>
-            )}
-
             <DialogFooter>
               <Button variant="outline" onClick={() => onOpenChange(false)}>Anuluj</Button>
               <Button onClick={handleSave} disabled={saving || !description || !amount}>
@@ -355,6 +482,8 @@ function ReceiptCard({ receipt, categories, onEdit, onDelete, onDuplicate, onCre
   onCreateExpense: () => void;
 }) {
   const cat = categories.find(c => c.id === receipt.categoryId);
+  const status = receiptStatusLabel(receipt);
+  const canApprove = receipt.ocrStatus !== 'PENDING' && !receipt.isApproved;
 
   return (
     <Card className="hover:shadow-md transition-shadow">
@@ -373,7 +502,7 @@ function ReceiptCard({ receipt, categories, onEdit, onDelete, onDuplicate, onCre
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={onEdit}><Edit2 className="h-3 w-3 mr-2" /> Edytuj</DropdownMenuItem>
               <DropdownMenuItem onClick={onDuplicate}><Copy className="h-3 w-3 mr-2" /> Duplikuj</DropdownMenuItem>
-              <DropdownMenuItem onClick={onCreateExpense}><TrendingUp className="h-3 w-3 mr-2" /> Utwórz wydatek</DropdownMenuItem>
+              <DropdownMenuItem onClick={onCreateExpense} disabled={!canApprove}><TrendingUp className="h-3 w-3 mr-2" /> Zatwierdź</DropdownMenuItem>
               <DropdownMenuItem onClick={onDelete} className="text-destructive"><Trash2 className="h-3 w-3 mr-2" /> Usuń</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -383,6 +512,8 @@ function ReceiptCard({ receipt, categories, onEdit, onDelete, onDuplicate, onCre
           <span className="text-lg font-bold">{formatPLN(receipt.amount)}</span>
           {cat && <Badge variant="secondary" style={{ backgroundColor: cat.color ?? undefined }} className="text-xs">{cat.icon} {cat.name}</Badge>}
         </div>
+
+        <Badge className={status.className}>{status.label}</Badge>
 
         {receipt.items && receipt.items.length > 0 && (
           <p className="text-xs text-muted-foreground">{receipt.items.length} pozycji</p>
@@ -395,6 +526,13 @@ function ReceiptCard({ receipt, categories, onEdit, onDelete, onDuplicate, onCre
         )}
 
         {receipt.imageUrl && <ImageIcon className="h-3 w-3 text-muted-foreground" />}
+
+        {canApprove && (
+          <Button size="sm" className="w-full" onClick={onCreateExpense}>
+            <TrendingUp className="h-3.5 w-3.5 mr-1.5" />
+            Zatwierdź
+          </Button>
+        )}
       </CardContent>
     </Card>
   );
@@ -440,8 +578,12 @@ function ImageViewer({ imageUrl, open, onClose }: { imageUrl: string; open: bool
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-3xl">
         <DialogHeader><DialogTitle>Zdjęcie paragonu</DialogTitle></DialogHeader>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={imageUrl} alt="Paragon" className="w-full rounded-lg" />
+        {isPdfDataUrl(imageUrl) ? (
+          <iframe src={imageUrl} title="Paragon PDF" className="h-[70vh] w-full rounded-lg border" />
+        ) : (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={imageUrl} alt="Paragon" className="w-full rounded-lg" />
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -513,6 +655,14 @@ export default function ReceiptsPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  useEffect(() => {
+    const handler = () => {
+      loadData();
+    };
+    window.addEventListener('financio:receipts-refresh', handler);
+    return () => window.removeEventListener('financio:receipts-refresh', handler);
+  }, [loadData]);
+
   const handleDelete = async () => {
     if (!deleteId) return;
     try { await api.deleteReceipt(deleteId); setDeleteId(null); loadData(); } catch (e) { console.error(e); }
@@ -522,8 +672,10 @@ export default function ReceiptsPage() {
     try { await api.duplicateReceipt(id); loadData(); } catch (e) { console.error(e); }
   };
 
-  const handleCreateExpense = async (id: string) => {
+  const handleApproveReceipt = async (id: string) => {
     try { await api.createExpenseFromReceipt(id); } catch (e) { console.error(e); }
+    loadData();
+    window.dispatchEvent(new Event('financio:summary-refresh'));
   };
 
   const handleEditOpen = (r: IReceipt) => {
@@ -583,7 +735,7 @@ export default function ReceiptsPage() {
       <Card>
         <CardContent className="p-3">
           <div className="flex items-center gap-2 flex-wrap">
-            <div className="relative flex-1 min-w-[200px]">
+            <div className="relative flex-1 min-w-50">
               <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Szukaj paragonów..." className="pl-8 h-9" />
             </div>
@@ -649,6 +801,7 @@ export default function ReceiptsPage() {
                     Opis {sortKey === 'description' && <ArrowUpDown className="inline h-3 w-3" />}
                   </TableHead>
                   <TableHead>Kategoria</TableHead>
+                  <TableHead>Status</TableHead>
                   <TableHead className="text-right cursor-pointer select-none" onClick={() => toggleSort('amount')}>
                     Kwota {sortKey === 'amount' && <ArrowUpDown className="inline h-3 w-3" />}
                   </TableHead>
@@ -659,10 +812,12 @@ export default function ReceiptsPage() {
               <TableBody>
                 {sortedReceipts.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">Brak paragonów</TableCell>
+                    <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">Brak paragonów</TableCell>
                   </TableRow>
                 ) : sortedReceipts.map((r) => {
                   const cat = getCategoryName(r.categoryId);
+                  const status = receiptStatusLabel(r);
+                  const canApprove = r.ocrStatus !== 'PENDING' && !r.isApproved;
                   return (
                     <TableRow key={r.id} className="cursor-pointer" onClick={() => handleEditOpen(r)}>
                       <TableCell className="text-sm">{formatDate(r.date)}</TableCell>
@@ -675,25 +830,35 @@ export default function ReceiptsPage() {
                       <TableCell>
                         {cat && <Badge variant="secondary" className="text-xs">{cat.icon} {cat.name}</Badge>}
                       </TableCell>
+                      <TableCell>
+                        <Badge className={status.className}>{status.label}</Badge>
+                      </TableCell>
                       <TableCell className="text-right font-semibold text-sm">{formatPLN(r.amount)}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {r.items && r.items.length > 0 ? `${r.items.length} poz.` : '—'}
                       </TableCell>
                       <TableCell onClick={e => e.stopPropagation()}>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-7 w-7">
-                              <MoreHorizontal className="h-4 w-4" />
+                        <div className="flex items-center justify-end gap-1">
+                          {canApprove && (
+                            <Button size="sm" className="h-7 px-2" onClick={() => handleApproveReceipt(r.id)}>
+                              Zatwierdź
                             </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => handleEditOpen(r)}><Edit2 className="h-3 w-3 mr-2" /> Edytuj</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleDuplicate(r.id)}><Copy className="h-3 w-3 mr-2" /> Duplikuj</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleCreateExpense(r.id)}><TrendingUp className="h-3 w-3 mr-2" /> Utwórz wydatek</DropdownMenuItem>
-                            {r.imageUrl && <DropdownMenuItem onClick={() => setViewImage(r.imageUrl!)}><ImageIcon className="h-3 w-3 mr-2" /> Zdjęcie</DropdownMenuItem>}
-                            <DropdownMenuItem onClick={() => setDeleteId(r.id)} className="text-destructive"><Trash2 className="h-3 w-3 mr-2" /> Usuń</DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                          )}
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-7 w-7">
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => handleEditOpen(r)}><Edit2 className="h-3 w-3 mr-2" /> Edytuj</DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleDuplicate(r.id)}><Copy className="h-3 w-3 mr-2" /> Duplikuj</DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleApproveReceipt(r.id)} disabled={!canApprove}><TrendingUp className="h-3 w-3 mr-2" /> Zatwierdź</DropdownMenuItem>
+                              {r.imageUrl && <DropdownMenuItem onClick={() => setViewImage(r.imageUrl!)}><ImageIcon className="h-3 w-3 mr-2" /> Plik</DropdownMenuItem>}
+                              <DropdownMenuItem onClick={() => setDeleteId(r.id)} className="text-destructive"><Trash2 className="h-3 w-3 mr-2" /> Usuń</DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
@@ -719,7 +884,7 @@ export default function ReceiptsPage() {
               onEdit={() => handleEditOpen(r)}
               onDelete={() => setDeleteId(r.id)}
               onDuplicate={() => handleDuplicate(r.id)}
-              onCreateExpense={() => handleCreateExpense(r.id)}
+              onCreateExpense={() => handleApproveReceipt(r.id)}
             />
           ))}
         </div>

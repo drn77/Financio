@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, OnModuleInit, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, OnModuleInit, Logger } from '@nestjs/common';
 import { ReceiptActionsService } from './receipt-actions.service';
 import { TemplateActionsService } from '../template/template-actions.service';
 import { RecordActionsService } from '../template/record-actions.service';
@@ -18,8 +18,7 @@ export class ReceiptContextService implements OnModuleInit {
   // #region Private
   private async _autoCreateExpense(
     familyId: string,
-    receipt: { id: string; description: string; amount: number; currency?: string; date: Date; categoryId?: string },
-    categoryName?: string,
+    receipt: { id: string; description: string; amount: number; currency?: string; date: Date; notes?: string | null },
   ) {
     try {
       const defaultTemplate = await this.templateActions.findDefaultTemplate(familyId);
@@ -27,18 +26,51 @@ export class ReceiptContextService implements OnModuleInit {
 
       const maxSort = await this.recordActions.getMaxSortOrder(defaultTemplate.id);
 
+      const columns = Array.isArray((defaultTemplate as any).columns) ? ((defaultTemplate as any).columns as any[]) : [];
+      const recordData: Record<string, any> = {
+        _receiptId: receipt.id,
+        _receiptDescription: receipt.description,
+      };
+
+      const firstCurrencyCol = columns.find((c: any) => c?.type === 'currency' && typeof c?.id === 'string');
+      if (firstCurrencyCol) {
+        recordData[firstCurrencyCol.id] = {
+          amount: Number(receipt.amount),
+          currency: receipt.currency ?? 'PLN',
+        };
+      } else {
+        recordData.col_amount = { amount: Number(receipt.amount), currency: receipt.currency ?? 'PLN' };
+      }
+
+      const firstDateCol = columns.find((c: any) => c?.type === 'date' && typeof c?.id === 'string');
+      if (firstDateCol) {
+        recordData[firstDateCol.id] = new Date(receipt.date).toISOString().split('T')[0];
+      } else {
+        recordData.col_date = new Date(receipt.date).toISOString().split('T')[0];
+      }
+
+      const firstNameCol = columns.find((c: any) => c?.type === 'text' && typeof c?.id === 'string' && /name|nazwa|description|opis/i.test(String(c?.id ?? '') + ' ' + String(c?.name ?? '')));
+      if (firstNameCol) {
+        recordData[firstNameCol.id] = receipt.description;
+      } else {
+        recordData.col_name = receipt.description;
+      }
+
+      const firstNotesCol = columns.find((c: any) => c?.type === 'text' && typeof c?.id === 'string' && /notes|notat/i.test(String(c?.id ?? '') + ' ' + String(c?.name ?? '')));
+      if (firstNotesCol && receipt.notes) {
+        recordData[firstNotesCol.id] = receipt.notes;
+      }
+
+      const paidCheckboxCol = columns.find((c: any) => c?.type === 'checkbox' && typeof c?.id === 'string' && /paid|oplac|zaplac|rozlicz/i.test(String(c?.id ?? '') + ' ' + String(c?.name ?? '')));
+      if (paidCheckboxCol) {
+        recordData[paidCheckboxCol.id] = true;
+      } else {
+        recordData.col_paid = true;
+      }
+
       await this.recordActions.createRecord({
         templateId: defaultTemplate.id,
-        data: {
-          col_date: new Date(receipt.date).toISOString().split('T')[0],
-          col_type: 'Wydatek',
-          col_category: categoryName ? [categoryName] : [],
-          col_amount: { amount: receipt.amount, currency: receipt.currency ?? 'PLN' },
-          col_person: '',
-          col_paid: true,
-          _receiptId: receipt.id,
-          _receiptDescription: receipt.description,
-        },
+        data: recordData,
         sortOrder: maxSort + 1,
       });
     } catch (e) {
@@ -54,12 +86,12 @@ export class ReceiptContextService implements OnModuleInit {
 
   private async runImageCleanup() {
     try {
-      const result = await this.receiptActions.cleanupExpiredReceiptImages();
+      const result = await this.receiptActions.cleanupExpiredReceipts();
       if (result.cleaned > 0) {
-        this.logger.log(`Cleaned up ${result.cleaned} expired receipt image(s)`);
+        this.logger.log(`Cleaned up ${result.cleaned} expired receipt(s)`);
       }
     } catch (e) {
-      this.logger.error('Failed to clean up receipt images', e);
+      this.logger.error('Failed to clean up expired receipts', e);
     }
   }
 
@@ -87,11 +119,11 @@ export class ReceiptContextService implements OnModuleInit {
       notes: input.notes,
       items: input.items,
       tagIds: input.tagIds,
+      ocrStatus: input.ocrStatus,
+      ocrError: input.ocrError,
+      isApproved: input.isApproved,
+      approvedAt: input.approvedAt ? new Date(input.approvedAt) : undefined,
     });
-
-    if (input.autoCreateExpense) {
-      await this._autoCreateExpense(familyId, receipt);
-    }
 
     return receipt;
   }
@@ -120,6 +152,8 @@ export class ReceiptContextService implements OnModuleInit {
         categoryId: i.categoryId,
       })),
       tagIds: existing.tags.map((t: any) => t.id),
+      ocrStatus: 'COMPLETED',
+      isApproved: false,
     });
 
     return receipt;
@@ -185,6 +219,10 @@ export class ReceiptContextService implements OnModuleInit {
       notes: input.notes,
       items: input.items,
       tagIds: input.tagIds,
+      ocrStatus: input.ocrStatus,
+      ocrError: input.ocrError,
+      isApproved: input.isApproved,
+      approvedAt: input.approvedAt ? new Date(input.approvedAt) : undefined,
     });
   }
   // #endregion
@@ -203,8 +241,25 @@ export class ReceiptContextService implements OnModuleInit {
     const receipt = await this.receiptActions.findReceiptById(id, familyId);
     if (!receipt) throw new NotFoundException('Receipt not found');
 
+    if ((receipt as any).ocrStatus === 'PENDING') {
+      throw new BadRequestException('Paragon jest jeszcze przetwarzany. Poczekaj na zakończenie OCR.');
+    }
+
+    if ((receipt as any).isApproved) {
+      throw new BadRequestException('Paragon został już zatwierdzony.');
+    }
+
+    if (Number((receipt as any).amount ?? 0) <= 0) {
+      throw new BadRequestException('Uzupełnij kwotę paragonu przed zatwierdzeniem.');
+    }
+
     await this._autoCreateExpense(familyId, receipt);
-    return { message: 'Expense created from receipt' };
+    await this.receiptActions.updateReceipt(id, familyId, {
+      isApproved: true,
+      approvedAt: new Date(),
+    });
+
+    return { message: 'Receipt approved and expense created' };
   }
   // #endregion
 }

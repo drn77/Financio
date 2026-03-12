@@ -72,7 +72,7 @@ export class BillController {
     @Param('id') id: string,
     @Param('paymentId') paymentId: string,
   ) {
-    await this.billContext.deleteBillPayment(id, paymentId, familyId);
+    await this.billContext.deleteBillPayment(paymentId, id, familyId);
     return { message: 'Payment deleted successfully' };
   }
 }

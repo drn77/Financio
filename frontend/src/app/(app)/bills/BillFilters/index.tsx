@@ -11,22 +11,20 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Search, X, Filter } from 'lucide-react';
-import type { ICategory } from '@shared/models';
 import { STATUS_LABELS, type IFilterState, type ITagOption, type BillStatus } from '../model';
 
 interface Props {
   filters: IFilterState;
   onFiltersChange: (filters: IFilterState) => void;
-  categories: ICategory[];
   tags: ITagOption[];
 }
 
-export function BillFilters({ filters, onFiltersChange, categories, tags }: Props) {
+export function BillFilters({ filters, onFiltersChange, tags }: Props) {
   const hasActiveFilters =
-    filters.status !== 'ALL' || filters.tagIds.length > 0 || filters.categoryId !== '' || filters.search !== '';
+    filters.status !== 'ALL' || filters.tagIds.length > 0 || filters.search !== '';
 
   const _clearFilters = () => {
-    onFiltersChange({ status: 'ALL', tagIds: [], categoryId: '', search: '' });
+    onFiltersChange({ status: 'ALL', tagIds: [], search: '' });
   };
 
   const _toggleTag = (tagId: string) => {
@@ -67,31 +65,6 @@ export function BillFilters({ filters, onFiltersChange, categories, tags }: Prop
             ))}
           </SelectContent>
         </Select>
-
-        {categories.length > 0 && (
-          <Select
-            value={filters.categoryId || 'all'}
-            onValueChange={(v) => onFiltersChange({ ...filters, categoryId: v === 'all' ? '' : v })}
-          >
-            <SelectTrigger className="w-44">
-              <SelectValue placeholder="Kategoria" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Wszystkie kategorie</SelectItem>
-              {categories.map((cat) => (
-                <SelectItem key={cat.id} value={cat.id}>
-                  <span className="flex items-center gap-2">
-                    <span
-                      className="inline-block h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: cat.color }}
-                    />
-                    {cat.name}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
 
         {hasActiveFilters && (
           <Button variant="ghost" size="sm" onClick={_clearFilters} className="gap-1">

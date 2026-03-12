@@ -6,6 +6,8 @@
     "seed": "ts-node prisma/seed.ts"
   },
   "scripts": {
+    "prestart": "prisma generate",
+    "prestart:dev": "prisma generate",
     "build": "nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -15,7 +17,8 @@
     "migrate:generate": "prisma migrate dev",
     "migrate:seed": "ts-node prisma/seed.ts",
     "client:generate": "prisma generate",
-    "test": "echo \"No tests configured\" && exit 0"
+    "test": "echo \"No tests configured\" && exit 0",
+    "test:e2e:bill-auto-expense": "ts-node e2e/bill-auto-expense.e2e.ts"
   },
   "keywords": [],
   "author": "",

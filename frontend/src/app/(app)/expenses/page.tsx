@@ -38,6 +38,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -51,7 +56,6 @@ import {
   Plus,
   Trash2,
   MoreVertical,
-  Save,
   Download,
   Upload,
   Camera,
@@ -79,6 +83,11 @@ interface ColumnDef {
   options?: string[];
   currencyOptions?: string[];
   defaultBehavior: string;
+  colorFieldByTag?: string;
+  colorRowByTag?: boolean;
+  allowMultiple?: boolean;
+  tagGroupId?: string;
+  defaultTagId?: string;
 }
 
 interface RecordRow {
@@ -102,7 +111,7 @@ function getDefaultValue(col: ColumnDef, _username?: string): any {
       return _username ?? '';
     default:
       if (col.type === 'currency') return { amount: 0, currency: col.currencyOptions?.[0] ?? 'PLN' };
-      if (col.type === 'tags') return [];
+      if (col.type === 'tag_group') return [];
       if (col.type === 'checkbox') return false;
       return '';
   }
@@ -125,6 +134,8 @@ export default function ExpensesPage() {
   const [allRecords, setAllRecords] = useState<RecordRow[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
   const [familyMembers, setFamilyMembers] = useState<any[]>([]);
+  const [tagGroups, setTagGroups] = useState<any[]>([]);
+  const [tagMappings, setTagMappings] = useState<{ income?: string; expense?: string; planning?: string; costs?: string }>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [receiptDialogOpen, setReceiptDialogOpen] = useState(false);
@@ -133,6 +144,25 @@ export default function ExpensesPage() {
   const [csvImportOpen, setCSVImportOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<{ rowIndex: number } | null>(null);
   const hasUnsaved = useRef(false);
+  const deletedIdsRef = useRef<string[]>([]);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveAllRef = useRef<() => Promise<void>>(async () => {});
+
+  const triggerAutoSave = useCallback(() => {
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(() => {
+      saveAllRef.current();
+    }, 1000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+    };
+  }, []);
 
   // Filtering, sorting, pagination state
   const [filters, setFilters] = useState<IExpenseFilterState>(EMPTY_FILTERS);
@@ -154,16 +184,36 @@ export default function ExpensesPage() {
     return map;
   }, [categories]);
 
+  // Tag color map from tagGroups (tag name → color)
+  const tagColorMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const group of tagGroups) {
+      for (const tag of group.tags ?? []) {
+        map[tag.name] = tag.color || '#888';
+      }
+    }
+    return map;
+  }, [tagGroups]);
+
+  // Combined color map: tag_group columns use tagColorMap for row/cell coloring
+  const getColorForTag = useCallback((tagName: string) => {
+    return tagColorMap[tagName] || categoryColorMap[tagName] || '#888';
+  }, [tagColorMap, categoryColorMap]);
+
   const loadData = useCallback(async () => {
     try {
-      const [tmpl, cats, members] = await Promise.all([
+      const [tmpl, cats, members, tGroups, mappings] = await Promise.all([
         api.getDefaultTemplate(),
         api.getCategories(),
         api.getFamilyMembers().catch(() => []),
+        api.getTagGroups().catch(() => []),
+        api.getTagMappings().catch(() => ({})),
       ]);
       setTemplate(tmpl);
       setCategories(cats);
       setFamilyMembers(Array.isArray(members) ? members : []);
+      setTagGroups(Array.isArray(tGroups) ? tGroups : []);
+      setTagMappings(mappings ?? {});
 
       const result = await api.getRecords(tmpl.id, 1, 500);
       const rows: RecordRow[] = (result.records ?? []).map((r: any) => ({
@@ -297,10 +347,17 @@ export default function ExpensesPage() {
   }, []);
 
   const removeRow = useCallback((globalIndex: number) => {
-    setAllRecords((prev) => prev.filter((_, i) => i !== globalIndex));
+    setAllRecords((prev) => {
+      const row = prev[globalIndex];
+      if (row?.id) {
+        deletedIdsRef.current = [...deletedIdsRef.current, row.id];
+      }
+      return prev.filter((_, i) => i !== globalIndex);
+    });
     hasUnsaved.current = true;
     setDeleteConfirm(null);
-  }, []);
+    triggerAutoSave();
+  }, [triggerAutoSave]);
 
   const duplicateRow = useCallback(
     (globalIndex: number) => {
@@ -336,20 +393,20 @@ export default function ExpensesPage() {
   }, []);
 
   const saveAll = useCallback(async () => {
-    if (!template) return;
+    if (!template || !hasUnsaved.current) return;
     setSaving(true);
+    setSaveStatus('saving');
     try {
       const toSend = allRecords.map((r, i) => ({
         id: r.id,
         data: r.data,
         sortOrder: i,
       }));
-      const originalIds = allRecords.filter((r) => r.id).map((r) => r.id!);
-      const currentIds = new Set(allRecords.filter((r) => r.id).map((r) => r.id!));
-      const deletedIds = originalIds.filter((id) => !currentIds.has(id));
+      const deletedIds = deletedIdsRef.current;
 
       await api.bulkUpdateRecords(template.id, toSend, deletedIds);
       hasUnsaved.current = false;
+      deletedIdsRef.current = [];
 
       const result = await api.getRecords(template.id, 1, 500);
       setAllRecords(
@@ -358,12 +415,18 @@ export default function ExpensesPage() {
           data: r.data,
         })),
       );
+      window.dispatchEvent(new Event('financio:summary-refresh'));
+      setSaveStatus('saved');
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
     } catch (e) {
       console.error('Save failed:', e);
+      setSaveStatus('idle');
     } finally {
       setSaving(false);
     }
   }, [allRecords, template]);
+  saveAllRef.current = saveAll;
 
   const exportCSV = useCallback(() => {
     if (!columns.length || !allRecords.length) return;
@@ -487,9 +550,14 @@ export default function ExpensesPage() {
           <Button variant="outline" size="sm" onClick={addRow}>
             <Plus className="h-4 w-4 mr-1" /> Dodaj
           </Button>
-          <Button size="sm" onClick={saveAll} disabled={saving}>
-            <Save className="h-4 w-4 mr-1" /> {saving ? 'Zapisuję...' : 'Zapisz'}
-          </Button>
+          {saveStatus === 'saving' && (
+            <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Zapisywanie...
+            </span>
+          )}
+          {saveStatus === 'saved' && (
+            <span className="text-sm text-green-600 dark:text-green-400">✓ Zapisano</span>
+          )}
         </div>
       </div>
 
@@ -552,21 +620,48 @@ export default function ExpensesPage() {
               paginatedRecords.map((row) => {
                 const globalIdx = getGlobalIndex(row);
                 const rowNum = (page - 1) * ROWS_PER_PAGE + paginatedRecords.indexOf(row) + 1;
+                // Row coloring from colorRowByTag column
+                const colorRowCol = columns.find(c => c.colorRowByTag);
+                let rowBgColor: string | undefined;
+                if (colorRowCol) {
+                  const rowTags = Array.isArray(row.data[colorRowCol.id]) ? row.data[colorRowCol.id] as string[] : [];
+                  const tagColor = rowTags.length > 0 ? getColorForTag(rowTags[0]) : undefined;
+                  if (tagColor && tagColor !== '#888') {
+                    rowBgColor = `${tagColor}15`;
+                  }
+                }
                 return (
-                  <TableRow key={row.id ?? `new-${globalIdx}`} className={row.isDirty ? 'bg-accent/30' : ''}>
+                  <TableRow key={row.id ?? `new-${globalIdx}`} style={rowBgColor ? { backgroundColor: rowBgColor } : undefined}>
                     <TableCell className="text-muted-foreground text-xs">{rowNum}</TableCell>
-                    {visibleColumns.map((col) => (
-                      <TableCell key={col.id} className="p-1">
-                        <CellEditor
-                          column={col}
-                          value={row.data[col.id]}
-                          onChange={(v) => updateCell(globalIdx, col.id, v)}
-                          categories={categories}
-                          familyMembers={familyMembers}
-                          categoryColorMap={categoryColorMap}
-                        />
-                      </TableCell>
-                    ))}
+                    {visibleColumns.map((col) => {
+                      // Cell coloring from colorFieldByTag
+                      let cellBgColor: string | undefined;
+                      if (col.colorFieldByTag) {
+                        const refTags = Array.isArray(row.data[col.colorFieldByTag]) ? row.data[col.colorFieldByTag] as string[] : [];
+                        const tagColor = refTags.length > 0 ? getColorForTag(refTags[0]) : undefined;
+                        if (tagColor && tagColor !== '#888') {
+                          cellBgColor = `${tagColor}20`;
+                        }
+                      }
+                      return (
+                        <TableCell key={col.id} className="p-1" style={cellBgColor ? { backgroundColor: cellBgColor } : undefined}>
+                          <CellEditor
+                            column={col}
+                            value={row.data[col.id]}
+                            onChange={(v) => updateCell(globalIdx, col.id, v)}
+                            onBlur={triggerAutoSave}
+                            categories={categories}
+                            familyMembers={familyMembers}
+                            categoryColorMap={categoryColorMap}
+                            tagGroups={tagGroups}
+                            tagColorMap={tagColorMap}
+                            tagMappings={tagMappings}
+                            rowData={row.data}
+                            columns={columns}
+                          />
+                        </TableCell>
+                      );
+                    })}
                     <TableCell className="p-1">
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -652,7 +747,7 @@ export default function ExpensesPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Usunąć wiersz?</AlertDialogTitle>
             <AlertDialogDescription>
-              Czy na pewno chcesz usunąć ten wpis? Operacja zostanie zapisana po kliknięciu &quot;Zapisz&quot;.
+              Czy na pewno chcesz usunąć ten wpis? Zmiana zostanie zapisana automatycznie.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -717,16 +812,28 @@ function CellEditor({
   column,
   value,
   onChange,
+  onBlur,
   categories,
   familyMembers,
   categoryColorMap,
+  tagGroups,
+  tagColorMap,
+  tagMappings,
+  rowData,
+  columns,
 }: {
   column: ColumnDef;
   value: any;
   onChange: (v: any) => void;
+  onBlur?: () => void;
   categories: any[];
   familyMembers: any[];
   categoryColorMap: Record<string, string>;
+  tagGroups: any[];
+  tagColorMap: Record<string, string>;
+  tagMappings: { income?: string; expense?: string; planning?: string; costs?: string };
+  rowData: Record<string, any>;
+  columns: ColumnDef[];
 }) {
   switch (column.type) {
     case 'text':
@@ -734,6 +841,7 @@ function CellEditor({
         <Input
           value={value ?? ''}
           onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur}
           className="h-8 text-sm border-0 bg-transparent focus:bg-card"
           placeholder={column.name}
         />
@@ -745,6 +853,7 @@ function CellEditor({
           type="number"
           value={value ?? ''}
           onChange={(e) => onChange(e.target.value ? Number(e.target.value) : '')}
+          onBlur={onBlur}
           className="h-8 text-sm border-0 bg-transparent focus:bg-card"
           placeholder="0"
         />
@@ -756,6 +865,7 @@ function CellEditor({
           type="date"
           value={value ?? ''}
           onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur}
           className="h-8 text-sm border-0 bg-transparent focus:bg-card"
         />
       );
@@ -765,14 +875,14 @@ function CellEditor({
         <div className="flex justify-center">
           <Checkbox
             checked={!!value}
-            onCheckedChange={(checked) => onChange(!!checked)}
+            onCheckedChange={(checked) => { onChange(!!checked); onBlur?.(); }}
           />
         </div>
       );
 
     case 'select':
       return (
-        <Select value={value ?? ''} onValueChange={onChange}>
+        <Select value={value ?? ''} onValueChange={(v) => { onChange(v); onBlur?.(); }}>
           <SelectTrigger className="h-8 text-sm border-0 bg-transparent">
             <SelectValue placeholder={`Wybierz...`} />
           </SelectTrigger>
@@ -789,6 +899,35 @@ function CellEditor({
     case 'currency': {
       const amount = value?.amount ?? '';
       const currency = value?.currency ?? column.currencyOptions?.[0] ?? 'PLN';
+      // Dynamic background based on tag mappings (income/expense)
+      // tagMappings values are tag IDs, but record values are tag names — resolve first
+      let amountBg: string | undefined;
+      if (tagMappings.income || tagMappings.expense) {
+        // Build a tag ID → name lookup from tagGroups
+        const idToName: Record<string, string> = {};
+        for (const group of tagGroups) {
+          for (const tag of group.tags ?? []) {
+            idToName[tag.id] = tag.name;
+          }
+        }
+        const incomeTagName = tagMappings.income ? idToName[tagMappings.income] : undefined;
+        const expenseTagName = tagMappings.expense ? idToName[tagMappings.expense] : undefined;
+
+        const tagGroupCols = columns.filter(c => c.type === 'tag_group');
+        for (const tgCol of tagGroupCols) {
+          const cellVal = rowData[tgCol.id];
+          const selectedValues: string[] = Array.isArray(cellVal) ? cellVal : cellVal ? [cellVal] : [];
+          if (incomeTagName && selectedValues.includes(incomeTagName)) {
+            amountBg = 'rgba(34, 197, 94, 0.12)';
+            break;
+          }
+          if (expenseTagName && selectedValues.includes(expenseTagName)) {
+            amountBg = 'rgba(239, 68, 68, 0.12)';
+            break;
+          }
+        }
+      }
+
       return (
         <div className="flex items-center gap-1">
           <Input
@@ -798,7 +937,14 @@ function CellEditor({
             onChange={(e) =>
               onChange({ amount: e.target.value ? Number(e.target.value) : '', currency })
             }
-            className="h-8 text-sm border-0 bg-transparent focus:bg-card flex-1"
+            onFocus={(e) => {
+              if (Number(e.target.value) === 0) {
+                onChange({ amount: '', currency });
+              }
+            }}
+            onBlur={onBlur}
+            className="h-8 text-sm border-0 flex-1 rounded-md"
+            style={amountBg ? { backgroundColor: amountBg } : undefined}
             placeholder="0.00"
           />
           <span className="text-xs text-muted-foreground shrink-0">{currency}</span>
@@ -806,51 +952,83 @@ function CellEditor({
       );
     }
 
-    case 'tags': {
+    case 'tag_group': {
       const tags: string[] = Array.isArray(value) ? value : [];
-      const categoryNames = categories.map((c: any) => c.name);
+      const group = tagGroups.find((g: any) => g.id === column.tagGroupId);
+      const availableTags: any[] = group?.tags ?? [];
+      const allowMultiple = column.allowMultiple !== false;
+
+      const toggleTag = (tagName: string) => {
+        if (tags.includes(tagName)) {
+          onChange(tags.filter((t) => t !== tagName));
+        } else {
+          if (allowMultiple) {
+            onChange([...tags, tagName]);
+          } else {
+            onChange([tagName]);
+          }
+        }
+        if (!allowMultiple) onBlur?.();
+      };
+
       return (
-        <div className="flex flex-wrap gap-1 items-center min-h-[32px]">
-          {tags.map((tag) => (
-            <Badge
-              key={tag}
-              variant="secondary"
-              className="text-xs cursor-pointer hover:bg-destructive/20 gap-1"
-              style={{
-                backgroundColor: categoryColorMap[tag] ? `${categoryColorMap[tag]}20` : undefined,
-                color: categoryColorMap[tag] || undefined,
-                borderColor: categoryColorMap[tag] || undefined,
-              }}
-              onClick={() => onChange(tags.filter((t) => t !== tag))}
+        <Popover onOpenChange={(open) => { if (!open) onBlur?.(); }}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="flex flex-wrap gap-1 items-center min-h-[32px] w-full rounded-md px-2 py-1 text-sm border-0 bg-transparent hover:bg-accent/50 cursor-pointer text-left"
             >
-              <span
-                className="inline-block h-2 w-2 rounded-full shrink-0"
-                style={{ backgroundColor: categoryColorMap[tag] || '#888' }}
-              />
-              {tag} ×
-            </Badge>
-          ))}
-          <Select onValueChange={(v) => { if (!tags.includes(v)) onChange([...tags, v]); }}>
-            <SelectTrigger className="h-6 w-20 text-xs border-0 bg-transparent">
-              <SelectValue placeholder="+" />
-            </SelectTrigger>
-            <SelectContent>
-              {categoryNames
-                .filter((n: string) => !tags.includes(n))
-                .map((name: string) => (
-                  <SelectItem key={name} value={name}>
-                    <span className="flex items-center gap-1.5">
+              {tags.length === 0 ? (
+                <span className="text-muted-foreground text-xs">Wybierz...</span>
+              ) : (
+                tags.map((tag) => (
+                  <Badge
+                    key={tag}
+                    variant="secondary"
+                    className="text-xs gap-1 pointer-events-none"
+                    style={{
+                      backgroundColor: tagColorMap[tag] ? `${tagColorMap[tag]}20` : undefined,
+                      color: tagColorMap[tag] || undefined,
+                      borderColor: tagColorMap[tag] || undefined,
+                    }}
+                  >
+                    <span
+                      className="inline-block h-2 w-2 rounded-full shrink-0"
+                      style={{ backgroundColor: tagColorMap[tag] || '#888' }}
+                    />
+                    {tag}
+                  </Badge>
+                ))
+              )}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-52 p-1" align="start">
+            <div className="max-h-48 overflow-y-auto">
+              {availableTags.length === 0 ? (
+                <p className="text-xs text-muted-foreground p-2 text-center">Brak tagów w grupie</p>
+              ) : (
+                availableTags.map((t: any) => {
+                  const isSelected = tags.includes(t.name);
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className={`flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded-sm hover:bg-accent cursor-pointer text-left ${isSelected ? 'bg-accent/60 font-medium' : ''}`}
+                      onClick={() => toggleTag(t.name)}
+                    >
                       <span
-                        className="inline-block h-2 w-2 rounded-full"
-                        style={{ backgroundColor: categoryColorMap[name] || '#888' }}
+                        className="inline-block h-2.5 w-2.5 rounded-full shrink-0"
+                        style={{ backgroundColor: t.color || '#888' }}
                       />
-                      {name}
-                    </span>
-                  </SelectItem>
-                ))}
-            </SelectContent>
-          </Select>
-        </div>
+                      <span className="flex-1 truncate">{t.icon ? `${t.icon} ` : ''}{t.name}</span>
+                      {isSelected && <span className="text-primary">✓</span>}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </PopoverContent>
+        </Popover>
       );
     }
 
@@ -860,7 +1038,7 @@ function CellEditor({
         label: m.nickname || m.user?.firstName || m.user?.username || 'Unknown',
       }));
       return (
-        <Select value={value ?? ''} onValueChange={onChange}>
+        <Select value={value ?? ''} onValueChange={(v) => { onChange(v); onBlur?.(); }}>
           <SelectTrigger className="h-8 text-sm border-0 bg-transparent">
             <SelectValue placeholder="Osoba..." />
           </SelectTrigger>
@@ -880,6 +1058,7 @@ function CellEditor({
         <Input
           value={String(value ?? '')}
           onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur}
           className="h-8 text-sm border-0 bg-transparent"
         />
       );

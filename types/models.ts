@@ -1,4 +1,4 @@
-export type ColumnType = 'text' | 'number' | 'date' | 'checkbox' | 'select' | 'tags' | 'currency' | 'person';
+export type ColumnType = 'text' | 'number' | 'date' | 'checkbox' | 'select' | 'tag_group' | 'currency' | 'person';
 
 export type DefaultBehavior =
   | 'empty'
@@ -108,7 +108,6 @@ export interface IBill {
   currency: string;
   dueDay: number;
   frequency: Frequency;
-  categoryId: string | null;
   notes: string | null;
   isActive: boolean;
   paymentType: PaymentType;
@@ -165,6 +164,10 @@ export interface IReceipt {
   personId: string | null;
   imageUrl: string | null;
   notes: string | null;
+  ocrStatus: 'PENDING' | 'COMPLETED' | 'FAILED';
+  ocrError: string | null;
+  isApproved: boolean;
+  approvedAt: string | null;
   items: IReceiptItem[];
   tags: IReceiptTag[];
   createdAt: string;

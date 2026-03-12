@@ -5,7 +5,6 @@ export interface IBillFormData {
   amount: string;
   dueDay: string;
   frequency: Frequency;
-  categoryId: string;
   notes: string;
   paymentType: PaymentType;
   autoCreateExpense: boolean;
@@ -24,7 +23,6 @@ export interface ITagOption {
 export interface IFilterState {
   status: BillStatus | 'ALL';
   tagIds: string[];
-  categoryId: string;
   search: string;
 }
 
@@ -33,7 +31,6 @@ export const EMPTY_FORM: IBillFormData = {
   amount: '',
   dueDay: '',
   frequency: 'MONTHLY',
-  categoryId: '',
   notes: '',
   paymentType: 'MANUAL',
   autoCreateExpense: false,

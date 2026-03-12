@@ -48,6 +48,15 @@ export class FamilyContextService {
   // #endregion
 
   // #region Update
+  async getTagMappings(familyId: string) {
+    const family = await this.familyActions.findFamilyById(familyId);
+    if (!family) throw new NotFoundException('Family not found');
+    return (family as any).tagMappings ?? {};
+  }
+
+  async updateTagMappings(familyId: string, data: { income?: string; expense?: string; planning?: string; costs?: string }) {
+    return this.familyActions.updateTagMappings(familyId, data);
+  }
   // #endregion
 
   // #region Delete

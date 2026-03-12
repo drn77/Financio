@@ -76,6 +76,16 @@ export class FamilyActionsService {
   // #endregion
 
   // #region Update
+  async updateTagMappings(
+    familyId: string,
+    tagMappings: { income?: string; expense?: string; planning?: string; costs?: string },
+  ) {
+    return this.prisma.family.update({
+      where: { id: familyId },
+      data: { tagMappings: tagMappings as any },
+      select: { tagMappings: true },
+    });
+  }
   // #endregion
 
   // #region Delete

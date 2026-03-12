@@ -48,6 +48,38 @@ export class RecordActionsService {
     });
   }
 
+  async findAutoExpenseRecordCandidates(
+    familyId: string,
+    billId: string,
+    amount: number,
+    dateIso: string,
+  ): Promise<TemplateRecord[]> {
+    return this.prisma.templateRecord.findMany({
+      where: {
+        template: { familyId },
+        AND: [
+          { data: { path: ['_billId'], equals: billId } as any },
+          { data: { path: ['col_type'], equals: 'Wydatek' } as any },
+          { data: { path: ['col_amount', 'amount'], equals: amount } as any },
+          { data: { path: ['col_date'], equals: dateIso } as any },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+    });
+  }
+
+  async deleteAutoExpenseRecordsByBillPaymentId(familyId: string, paymentId: string): Promise<number> {
+    const result = await this.prisma.templateRecord.deleteMany({
+      where: {
+        template: { familyId },
+        data: { path: ['_billPaymentId'], equals: paymentId } as any,
+      },
+    });
+
+    return result.count;
+  }
+
   async getMaxSortOrder(templateId: string): Promise<number> {
     const result = await this.prisma.templateRecord.aggregate({
       where: { templateId },

@@ -7,6 +7,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   Table,
   TableBody,
@@ -41,7 +49,9 @@ import {
   Palette,
   X,
   Tag,
+  Settings,
 } from 'lucide-react';
+import { toastError } from '@/lib/toast';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -102,6 +112,10 @@ export default function TagsPage() {
   // Show/hide tag form in edit dialog
   const [showTagForm, setShowTagForm] = useState(false);
 
+  // Tag mappings
+  const [tagMappings, setTagMappings] = useState<{ income?: string; expense?: string; planning?: string; costs?: string }>({});
+  const [savingMappings, setSavingMappings] = useState(false);
+
   // Drag state for tags within edit dialog
   const [dragIdx, setDragIdx] = useState<number | null>(null);
 
@@ -118,9 +132,19 @@ export default function TagsPage() {
     }
   }, []);
 
+  const loadTagMappings = useCallback(async () => {
+    try {
+      const data = await api.getTagMappings();
+      setTagMappings(data);
+    } catch (err) {
+      console.error('Failed to load tag mappings', err);
+    }
+  }, []);
+
   useEffect(() => {
     loadGroups();
-  }, [loadGroups]);
+    loadTagMappings();
+  }, [loadGroups, loadTagMappings]);
 
   // Keep editingGroup in sync with groups after reload
   useEffect(() => {
@@ -141,7 +165,7 @@ export default function TagsPage() {
       setShowNewGroup(false);
       await loadGroups();
     } catch (err: any) {
-      alert(err.message || 'Błąd');
+      toastError(err.message || 'Błąd');
     } finally {
       setSavingGroup(false);
     }
@@ -153,7 +177,7 @@ export default function TagsPage() {
       await api.updateTagGroup(editingGroup.id, { name: editGroupName.trim() });
       await loadGroups();
     } catch (err: any) {
-      alert(err.message || 'Błąd');
+      toastError(err.message || 'Błąd');
     }
   };
 
@@ -164,7 +188,7 @@ export default function TagsPage() {
       setDeleteGroup(null);
       await loadGroups();
     } catch (err: any) {
-      alert(err.message || 'Błąd');
+      toastError(err.message || 'Błąd');
     }
   };
 
@@ -220,7 +244,7 @@ export default function TagsPage() {
       resetTagForm();
       await loadGroups();
     } catch (err: any) {
-      alert(err.message || 'Błąd');
+      toastError(err.message || 'Błąd');
     } finally {
       setSavingTag(false);
     }
@@ -234,7 +258,7 @@ export default function TagsPage() {
       resetTagForm();
       await loadGroups();
     } catch (err: any) {
-      alert(err.message || 'Błąd');
+      toastError(err.message || 'Błąd');
     }
   };
 
@@ -271,7 +295,7 @@ export default function TagsPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 512 * 1024) {
-      alert('Plik za duży (max 512KB)');
+      toastError('Plik za duży (max 512KB)');
       return;
     }
     const reader = new FileReader();
@@ -279,6 +303,24 @@ export default function TagsPage() {
       setTagForm((prev) => ({ ...prev, imageUrl: reader.result as string, icon: '' }));
     };
     reader.readAsDataURL(file);
+  };
+
+  // --- Tag Mappings ---
+
+  const allTags = groups.flatMap((g) => g.tags.map((t) => ({ ...t, groupName: g.name })));
+
+  const handleMappingChange = async (key: 'income' | 'expense' | 'planning' | 'costs', tagId: string) => {
+    const updated = { ...tagMappings, [key]: tagId || undefined };
+    if (!tagId) delete updated[key];
+    setTagMappings(updated);
+    setSavingMappings(true);
+    try {
+      await api.updateTagMappings(updated);
+    } catch (err) {
+      console.error('Failed to save tag mappings', err);
+    } finally {
+      setSavingMappings(false);
+    }
   };
 
   // --- Helpers ---
@@ -406,6 +448,65 @@ export default function TagsPage() {
             </TableBody>
           </Table>
         </div>
+      )}
+
+      {/* Tag Mapping Configurator */}
+      {groups.length > 0 && allTags.length > 0 && (
+        <Card className="mt-6">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Settings className="h-5 w-5" />
+              Mapowanie tagów
+            </CardTitle>
+            <CardDescription>
+              Przypisz tagi do funkcji aplikacji — np. który tag oznacza przychód, wydatek lub planowanie.
+              Na tej podstawie kwoty będą kolorowane automatycznie.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {([
+                { key: 'income' as const, label: 'Przychód', color: 'text-green-600 dark:text-green-400' },
+                { key: 'expense' as const, label: 'Wydatek', color: 'text-red-600 dark:text-red-400' },
+                { key: 'planning' as const, label: 'Planowanie', color: 'text-blue-600 dark:text-blue-400' },
+                { key: 'costs' as const, label: 'Koszty podatkowe', color: 'text-amber-600 dark:text-amber-400' },
+              ]).map(({ key, label, color }) => (
+                <div key={key} className="space-y-1.5">
+                  <Label className={`text-sm font-medium ${color}`}>{label}</Label>
+                  <Select
+                    value={tagMappings[key] ?? '__none__'}
+                    onValueChange={(val) => handleMappingChange(key, val === '__none__' ? '' : val)}
+                  >
+                    <SelectTrigger className="h-9">
+                      <SelectValue placeholder="Brak" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Brak</SelectItem>
+                      {allTags.map((tag) => (
+                        <SelectItem key={tag.id} value={tag.id}>
+                          <span className="flex items-center gap-2">
+                            {tag.imageUrl ? (
+                              <img src={tag.imageUrl} alt={tag.name} className="h-4 w-4 rounded-full object-cover" />
+                            ) : tag.icon ? (
+                              <span className="text-xs">{tag.icon}</span>
+                            ) : (
+                              <span className="h-3 w-3 rounded-full inline-block" style={{ backgroundColor: tag.color }} />
+                            )}
+                            <span>{tag.name}</span>
+                            <span className="text-muted-foreground text-xs">({tag.groupName})</span>
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ))}
+            </div>
+            {savingMappings && (
+              <p className="text-xs text-muted-foreground mt-2">Zapisywanie...</p>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {/* New Group Dialog */}

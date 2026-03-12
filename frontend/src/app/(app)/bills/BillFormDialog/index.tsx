@@ -22,7 +22,6 @@ import {
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { X } from 'lucide-react';
-import type { ICategory } from '@shared/models';
 import {
   EMPTY_FORM,
   FREQUENCY_LABELS,
@@ -40,7 +39,6 @@ interface Props {
   form: IBillFormData;
   onFormChange: (form: IBillFormData) => void;
   onSubmit: () => void;
-  categories: ICategory[];
   tags: ITagOption[];
   editingBill: IBill | null;
   isSubmitting: boolean;
@@ -52,7 +50,6 @@ export function BillFormDialog({
   form,
   onFormChange,
   onSubmit,
-  categories,
   tags,
   editingBill,
   isSubmitting,
@@ -182,32 +179,6 @@ export function BillFormDialog({
                 </SelectContent>
               </Select>
             </div>
-          </div>
-
-          <div>
-            <Label>Kategoria</Label>
-            <Select
-              value={form.categoryId || 'none'}
-              onValueChange={(v) => _updateField('categoryId', v === 'none' ? '' : v)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Brak kategorii" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">Brak kategorii</SelectItem>
-                {categories.map((cat) => (
-                  <SelectItem key={cat.id} value={cat.id}>
-                    <span className="flex items-center gap-2">
-                      <span
-                        className="inline-block h-3 w-3 rounded-full"
-                        style={{ backgroundColor: cat.color }}
-                      />
-                      {cat.name}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           </div>
 
           {tags.length > 0 && (

@@ -29,6 +29,7 @@ import {
   ShoppingCart, ListTodo, StickyNote, Receipt, Copy, Search, ChevronDown,
   Clock, CheckCircle2, XCircle, AlertCircle, CircleDot,
 } from 'lucide-react';
+import { toastError } from '@/lib/toast';
 import type {
   IEvent, IEventItem, IEventTodo, IEventNote, IEventExpense, IEventStats,
   EventStatus, EventItemStatus, TodoPriority,
@@ -125,7 +126,7 @@ function EventFormDialog({ open, onOpenChange, event, onSave }: {
       }
       onSave();
       onOpenChange(false);
-    } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Błąd'); }
+    } catch (e: unknown) { toastError(e instanceof Error ? e.message : 'Błąd'); }
     finally { setSaving(false); }
   };
 

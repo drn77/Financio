@@ -22,7 +22,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Plus, LayoutGrid, List, ArrowUpDown } from 'lucide-react';
-import type { IBill, IBillPayment, ICategory } from '@shared/models';
+import type { IBill, IBillPayment } from '@shared/models';
 import {
   EMPTY_FORM,
   SORT_LABELS,
@@ -41,7 +41,6 @@ import { PaymentHistoryDialog } from './PaymentHistoryDialog';
 
 export default function BillsPage() {
   const [bills, setBills] = useState<IBill[]>([]);
-  const [categories, setCategories] = useState<ICategory[]>([]);
   const [tags, setTags] = useState<ITagOption[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -62,7 +61,6 @@ export default function BillsPage() {
   const [filters, setFilters] = useState<IFilterState>({
     status: 'ALL',
     tagIds: [],
-    categoryId: '',
     search: '',
   });
 
@@ -76,14 +74,12 @@ export default function BillsPage() {
 
   const _loadData = useCallback(async () => {
     try {
-      const [billsData, categoriesData, tagGroupsData] = await Promise.all([
+      const [billsData, tagGroupsData] = await Promise.all([
         api.getBills(),
-        api.getCategories(),
         api.getTagGroups(),
       ]);
 
       setBills(Array.isArray(billsData) ? billsData : []);
-      setCategories(Array.isArray(categoriesData) ? categoriesData as ICategory[] : []);
 
       const flatTags: ITagOption[] = [];
 
@@ -131,10 +127,6 @@ export default function BillsPage() {
       result = result.filter((b) =>
         b.tags.some((t) => filters.tagIds.includes(t.id)),
       );
-    }
-
-    if (filters.categoryId) {
-      result = result.filter((b) => b.categoryId === filters.categoryId);
     }
 
     if (filters.search) {
@@ -195,7 +187,6 @@ export default function BillsPage() {
       amount: String(bill.amount),
       dueDay: String(bill.dueDay),
       frequency: bill.frequency,
-      categoryId: bill.categoryId ?? '',
       notes: bill.notes ?? '',
       paymentType: bill.paymentType,
       autoCreateExpense: bill.autoCreateExpense,
@@ -215,7 +206,6 @@ export default function BillsPage() {
         amount: Number(form.amount),
         dueDay: Number(form.dueDay),
         frequency: form.frequency,
-        categoryId: form.categoryId || undefined,
         notes: form.notes || undefined,
         paymentType: form.paymentType,
         autoCreateExpense: form.autoCreateExpense,
@@ -409,7 +399,6 @@ export default function BillsPage() {
           <BillFilters
             filters={filters}
             onFiltersChange={setFilters}
-            categories={categories}
             tags={tags}
           />
 
@@ -419,7 +408,7 @@ export default function BillsPage() {
               value={sortField || '__none'}
               onValueChange={(v) => setSortField(v === '__none' ? '' as SortField | '' : v as SortField)}
             >
-              <SelectTrigger className="h-8 w-[140px]">
+              <SelectTrigger className="h-8 w-35">
                 <SelectValue placeholder="Sortuj" />
               </SelectTrigger>
               <SelectContent>
@@ -467,7 +456,6 @@ export default function BillsPage() {
                 <BillCard
                   key={bill.id}
                   bill={bill}
-                  categories={categories}
                   onPay={_handleOpenPay}
                   onEdit={_handleOpenEdit}
                   onDelete={_handleRequestDelete}
@@ -486,7 +474,6 @@ export default function BillsPage() {
         form={form}
         onFormChange={setForm}
         onSubmit={_handleSubmitForm}
-        categories={categories}
         tags={tags}
         editingBill={editingBill}
         isSubmitting={isSubmitting}

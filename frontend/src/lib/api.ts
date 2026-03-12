@@ -1,5 +1,6 @@
 import type { ILoginRequest, IRegisterRequest, IUser, ISessionResponse } from '@shared/auth';
 import type { IBill, IBillPayment, IBillStats, IRecordStats, IReceipt, IReceiptStats, IStore, IBudget, IEvent, IEventItem, IEventTodo, IEventNote, IEventExpense, IEventStats } from '@shared/models';
+import { toastError, toastSuccess } from './toast';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -30,22 +31,113 @@ class ApiClient {
     return headers;
   }
 
-  private async _request<T>(path: string, options: RequestInit = {}): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      ...options,
-      credentials: 'include',
-      headers: {
-        ...this._getHeaders(),
-        ...options.headers,
-      },
-    });
+  private _defaultSuccessMessage(method: string, path: string): string {
+    const cleanPath = path.split('?')[0];
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: 'Request failed' }));
-      throw new Error(error.message || `HTTP ${response.status}`);
+    if (method === 'POST' && cleanPath === '/api/v2/auth/login') return 'Zalogowano pomyślnie';
+    if (method === 'POST' && cleanPath === '/api/v2/auth/register') return 'Konto zostało utworzone';
+    if (method === 'POST' && cleanPath === '/api/v2/auth/logout') return 'Wylogowano pomyślnie';
+
+    if (method === 'PUT' && cleanPath === '/api/v2/tax/config') return 'Zapisano konfigurację podatków';
+    if (method === 'PUT' && cleanPath === '/api/v2/family/tag-mappings') return 'Zapisano mapowanie tagów';
+    if (method === 'PUT' && cleanPath === '/api/v2/kanban/config') return 'Zapisano konfigurację Kanban';
+    if (method === 'PUT' && cleanPath === '/api/v2/dashboard/config') return 'Zapisano konfigurację dashboardu';
+    if (method === 'POST' && cleanPath === '/api/v2/kanban/move') return 'Przeniesiono kartę';
+
+    if (method === 'POST' && /\/api\/v2\/bills\/[^/]+\/pay$/.test(cleanPath)) return 'Oznaczono rachunek jako opłacony';
+    if (method === 'POST' && /\/api\/v2\/fixed-expenses\/[^/]+\/pay$/.test(cleanPath)) return 'Opłacono stały wydatek';
+    if (method === 'POST' && /\/api\/v2\/receipts\/[^/]+\/create-expense$/.test(cleanPath)) return 'Zatwierdzono paragon i dodano wydatek';
+    if (method === 'POST' && /\/api\/v2\/templates\/[^/]+\/records\/import$/.test(cleanPath)) return 'Zaimportowano rekordy';
+    if (method === 'PUT' && /\/api\/v2\/templates\/[^/]+\/records\/bulk$/.test(cleanPath)) return 'Zapisano zmiany rekordów';
+    if (method === 'POST' && /\/api\/v2\/templates\/[^/]+\/records\/[^/]+\/duplicate$/.test(cleanPath)) return 'Zduplikowano rekord';
+    if (method === 'POST' && /\/api\/v2\/receipts\/[^/]+\/duplicate$/.test(cleanPath)) return 'Zduplikowano paragon';
+
+    if (method === 'PUT' && /\/api\/v2\/tag-groups\/[^/]+\/tags\/reorder$/.test(cleanPath)) return 'Zmieniono kolejność tagów';
+
+    if (method === 'POST') return 'Dodano pomyślnie';
+    if (method === 'PUT' || method === 'PATCH') return 'Zapisano zmiany';
+    if (method === 'DELETE') return 'Usunięto pomyślnie';
+    return 'Operacja zakończona powodzeniem';
+  }
+
+  private async _request<T>(
+    path: string,
+    options: RequestInit & {
+      timeout?: number;
+      notifySuccess?: boolean;
+      successMessage?: string;
+      suppressErrorToast?: boolean;
+    } = {}
+  ): Promise<T> {
+    const {
+      timeout = 15000,
+      notifySuccess,
+      successMessage,
+      suppressErrorToast = false,
+      ...fetchOptions
+    } = options;
+
+    const controller = new AbortController();
+    const timeoutId = timeout > 0 ? setTimeout(() => controller.abort(), timeout) : null;
+
+    try {
+      const response = await fetch(`${this.baseUrl}${path}`, {
+        ...fetchOptions,
+        credentials: 'include',
+        signal: controller.signal,
+        headers: {
+          ...this._getHeaders(),
+          ...fetchOptions.headers,
+        },
+      });
+
+      const method = (fetchOptions.method ?? 'GET').toUpperCase();
+      const isMutation = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
+
+      const responseData = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        const message = (responseData as { message?: string } | null)?.message || `HTTP ${response.status}`;
+        const requestError = new Error(message) as Error & { _toastShown?: boolean };
+        if (!suppressErrorToast) {
+          toastError(message);
+          requestError._toastShown = true;
+        }
+        throw requestError;
+      }
+
+      if ((notifySuccess ?? isMutation) && typeof window !== 'undefined') {
+        const messageFromResponse = (responseData as { message?: string } | null)?.message;
+        toastSuccess(
+          successMessage ||
+          this._defaultSuccessMessage(method, path) ||
+          messageFromResponse ||
+          'Operacja zakończona powodzeniem'
+        );
+      }
+
+      return responseData as T;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        const message = 'Przekroczono limit czasu połączenia z serwerem';
+        const timeoutError = new Error(message) as Error & { _toastShown?: boolean };
+        if (!suppressErrorToast) {
+          toastError(message);
+          timeoutError._toastShown = true;
+        }
+        throw timeoutError;
+      }
+
+      if (!suppressErrorToast && error instanceof Error && !(error as Error & { _toastShown?: boolean })._toastShown && error.message) {
+        if (error.message !== 'Request failed') {
+          toastError(error.message);
+        }
+      }
+
+      throw error;
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
     }
-
-    return response.json();
   }
 
   async getSession(): Promise<ISessionResponse> {
@@ -223,6 +315,14 @@ class ApiClient {
     return this._request(`/api/v2/family/members/${memberId}`, { method: 'DELETE' });
   }
 
+  async getTagMappings(): Promise<Record<string, string>> {
+    return this._request('/api/v2/family/tag-mappings');
+  }
+
+  async updateTagMappings(mappings: { income?: string; expense?: string; planning?: string; costs?: string }): Promise<Record<string, string>> {
+    return this._request('/api/v2/family/tag-mappings', { method: 'PUT', body: JSON.stringify(mappings) });
+  }
+
   // ─── Bills ────────────────────────────────────────
   async getBills(active?: boolean): Promise<IBill[]> {
     const params = active !== undefined ? `?active=${active}` : '';
@@ -290,12 +390,22 @@ class ApiClient {
     return this._request(`/api/v2/receipts/suggest-category?description=${encodeURIComponent(description)}`);
   }
 
-  async createReceipt(data: AnyRecord): Promise<IReceipt> {
-    return this._request('/api/v2/receipts', { method: 'POST', body: JSON.stringify(data) });
+  async createReceipt(data: AnyRecord, options?: { notifySuccess?: boolean; suppressErrorToast?: boolean }): Promise<IReceipt> {
+    return this._request('/api/v2/receipts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+      notifySuccess: options?.notifySuccess,
+      suppressErrorToast: options?.suppressErrorToast,
+    });
   }
 
-  async updateReceipt(id: string, data: AnyRecord): Promise<IReceipt> {
-    return this._request(`/api/v2/receipts/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  async updateReceipt(id: string, data: AnyRecord, options?: { notifySuccess?: boolean; suppressErrorToast?: boolean }): Promise<IReceipt> {
+    return this._request(`/api/v2/receipts/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+      notifySuccess: options?.notifySuccess,
+      suppressErrorToast: options?.suppressErrorToast,
+    });
   }
 
   async duplicateReceipt(id: string): Promise<IReceipt> {
@@ -454,8 +564,20 @@ class ApiClient {
     return this._request('/api/v2/fixed-expenses');
   }
 
+  async getFixedExpense(id: string): Promise<AnyRecord> {
+    return this._request(`/api/v2/fixed-expenses/${id}`);
+  }
+
   async createFixedExpense(data: AnyRecord): Promise<AnyRecord> {
     return this._request('/api/v2/fixed-expenses', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateFixedExpense(id: string, data: AnyRecord): Promise<AnyRecord> {
+    return this._request(`/api/v2/fixed-expenses/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async payFixedExpense(id: string, data?: AnyRecord): Promise<AnyRecord> {
+    return this._request(`/api/v2/fixed-expenses/${id}/pay`, { method: 'POST', body: JSON.stringify(data ?? {}) });
   }
 
   async deleteFixedExpense(id: string): Promise<void> {
@@ -469,6 +591,10 @@ class ApiClient {
 
   async createSavingsGoal(data: AnyRecord): Promise<AnyRecord> {
     return this._request('/api/v2/savings/goals', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateSavingsGoal(id: string, data: AnyRecord): Promise<AnyRecord> {
+    return this._request(`/api/v2/savings/goals/${id}`, { method: 'PUT', body: JSON.stringify(data) });
   }
 
   async addDeposit(goalId: string, data: AnyRecord): Promise<AnyRecord> {
@@ -488,8 +614,125 @@ class ApiClient {
     balanceAfterPlanned: number;
     incurredCosts: number;
     plannedCosts: number;
+    pendingReceiptOcrCount: number;
+    upcomingPlannedPayments: Array<{
+      id: string;
+      source: 'bill' | 'fixed-expense' | 'savings';
+      name: string;
+      amount: number;
+      currency: string;
+      dueDate: string;
+    }>;
   }> {
     return this._request('/api/v2/dashboard/summary');
+  }
+
+  async getDashboardConfig(): Promise<{
+    categoryFieldId: string | null;
+    availableCategoryFields: Array<{
+      id: string;
+      name: string;
+      tagGroupId: string | null;
+      tagGroupName: string | null;
+    }>;
+  }> {
+    return this._request('/api/v2/dashboard/config');
+  }
+
+  async updateDashboardConfig(data: { categoryFieldId?: string | null }): Promise<{
+    categoryFieldId: string | null;
+    availableCategoryFields: Array<{
+      id: string;
+      name: string;
+      tagGroupId: string | null;
+      tagGroupName: string | null;
+    }>;
+  }> {
+    return this._request('/api/v2/dashboard/config', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  // ─── Taxes ───────────────────────────────────────
+  async getTaxConfig(): Promise<{
+    form: 'SCALE' | 'LINEAR' | 'LUMPSUM';
+    lumpSumRate: number;
+    includeSickness: boolean;
+    includeSocialContributions: boolean;
+    includeHealthContribution: boolean;
+  }> {
+    return this._request('/api/v2/tax/config');
+  }
+
+  async updateTaxConfig(data: AnyRecord): Promise<AnyRecord> {
+    return this._request('/api/v2/tax/config', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async getTaxSummary(month?: number, year?: number): Promise<AnyRecord> {
+    const params = new URLSearchParams();
+    if (month) params.set('month', String(month));
+    if (year) params.set('year', String(year));
+    const qs = params.toString();
+    return this._request(`/api/v2/tax/summary${qs ? `?${qs}` : ''}`);
+  }
+
+  // ─── Kanban ───────────────────────────────────────
+  async getKanbanConfig(): Promise<{
+    columns: Array<{
+      id: string;
+      name: string;
+      tagId: string;
+      objectTypes: Array<'bill' | 'expense' | 'fixed-expense' | 'receipt'>;
+    }>;
+  }> {
+    return this._request('/api/v2/kanban/config');
+  }
+
+  async updateKanbanConfig(data: AnyRecord): Promise<AnyRecord> {
+    return this._request('/api/v2/kanban/config', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async getKanbanBoard(): Promise<{
+    columns: Array<{
+      id: string;
+      name: string;
+      tagId: string;
+      tagName?: string | null;
+      objectTypes: Array<'bill' | 'expense' | 'fixed-expense' | 'receipt'>;
+      cards: Array<{
+        id: string;
+        objectType: 'bill' | 'expense' | 'fixed-expense' | 'receipt';
+        objectId: string;
+        title: string;
+        amount: number;
+        currency: string;
+        meta?: string;
+        cardBgColor?: string;
+        amountBgColor?: string;
+      }>;
+    }>;
+  }> {
+    return this._request('/api/v2/kanban/board');
+  }
+
+  async moveKanbanCard(data: {
+    objectType: 'bill' | 'expense' | 'fixed-expense' | 'receipt';
+    objectId: string;
+    fromTagId?: string;
+    toTagId: string;
+  }): Promise<{ message: string }> {
+    return this._request('/api/v2/kanban/move', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async getKanbanCard(objectType: 'bill' | 'expense' | 'fixed-expense' | 'receipt', objectId: string): Promise<AnyRecord> {
+    const params = new URLSearchParams({ objectType, objectId });
+    return this._request(`/api/v2/kanban/card?${params.toString()}`);
+  }
+
+  async updateKanbanCard(data: {
+    objectType: 'bill' | 'expense' | 'fixed-expense' | 'receipt';
+    objectId: string;
+    patch: Record<string, unknown>;
+  }): Promise<{ message: string }> {
+    return this._request('/api/v2/kanban/card', { method: 'PUT', body: JSON.stringify(data) });
   }
 }
 

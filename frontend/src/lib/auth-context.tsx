@@ -8,6 +8,8 @@ interface IAuthContext {
   user: IUser | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  sessionError: boolean;
+  retrySession: () => void;
   login: (input: ILoginRequest) => Promise<void>;
   register: (input: IRegisterRequest) => Promise<void>;
   logout: () => Promise<void>;
@@ -22,8 +24,12 @@ interface Props {
 export function AuthProvider({ children }: Props) {
   const [user, setUser] = useState<IUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [sessionError, setSessionError] = useState(false);
 
-  useEffect(() => {
+  const loadSession = useCallback(() => {
+    setIsLoading(true);
+    setSessionError(false);
+
     api
       .getSession()
       .then((session) => {
@@ -41,11 +47,20 @@ export function AuthProvider({ children }: Props) {
         // Session check failed — clear stale cookie
         document.cookie = 'financio.sid=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
         setUser(null);
+        setSessionError(true);
       })
       .finally(() => {
         setIsLoading(false);
       });
   }, []);
+
+  useEffect(() => {
+    loadSession();
+  }, [loadSession]);
+
+  const retrySession = useCallback(() => {
+    loadSession();
+  }, [loadSession]);
 
   const login = useCallback(async (input: ILoginRequest) => {
     const response = await api.login(input);
@@ -73,7 +88,7 @@ export function AuthProvider({ children }: Props) {
   const isAuthenticated = !!user;
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, isAuthenticated, login, register, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, isAuthenticated, sessionError, retrySession, login, register, logout }}>
       {children}
     </AuthContext.Provider>
   );

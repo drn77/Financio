@@ -5,6 +5,23 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   TrendingUp,
   TrendingDown,
@@ -14,6 +31,7 @@ import {
   Calendar,
   PiggyBank,
   ChevronRight,
+  Settings,
 } from 'lucide-react';
 import {
   BarChart,
@@ -41,6 +59,16 @@ interface DashboardData {
   recentRecords: { id: string; data: any; createdAt: string }[];
 }
 
+interface DashboardConfig {
+  categoryFieldId: string | null;
+  availableCategoryFields: Array<{
+    id: string;
+    name: string;
+    tagGroupId: string | null;
+    tagGroupName: string | null;
+  }>;
+}
+
 const CHART_COLORS = [
   'oklch(0.72 0.19 155)',  // green
   'oklch(0.55 0.18 250)',  // blue
@@ -62,6 +90,9 @@ export default function DashboardPage() {
   const { user } = useAuth();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [config, setConfig] = useState<DashboardConfig>({ categoryFieldId: null, availableCategoryFields: [] });
+  const [showConfig, setShowConfig] = useState(false);
+  const [savingConfig, setSavingConfig] = useState(false);
 
   const loadDashboard = useCallback(async () => {
     try {
@@ -85,6 +116,25 @@ export default function DashboardPage() {
   useEffect(() => {
     loadDashboard();
   }, [loadDashboard]);
+
+  useEffect(() => {
+    api.getDashboardConfig()
+      .then((cfg) => setConfig(cfg))
+      .catch(() => setConfig({ categoryFieldId: null, availableCategoryFields: [] }));
+  }, []);
+
+  const saveDashboardConfig = async () => {
+    setSavingConfig(true);
+    try {
+      const next = await api.updateDashboardConfig({ categoryFieldId: config.categoryFieldId ?? null });
+      setConfig(next);
+      setShowConfig(false);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSavingConfig(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -113,7 +163,52 @@ export default function DashboardPage() {
             Podsumowanie finansów &mdash; {currentMonth} {new Date().getFullYear()}
           </p>
         </div>
-        <AddExpenseDialog onExpenseAdded={loadDashboard} />
+        <div className="flex items-center gap-2">
+          <Dialog open={showConfig} onOpenChange={setShowConfig}>
+            <DialogTrigger asChild>
+              <Button variant="outline" size="icon" className="h-10 w-10" aria-label="Konfiguracja dashboardu">
+                <Settings className="h-4 w-4" />
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Konfiguracja dashboardu</DialogTitle>
+                <DialogDescription>
+                  Wybierz pole kategorii używane w akcji „Nowy wydatek”.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Pole kategorii</p>
+                <Select
+                  value={config.categoryFieldId ?? '__none'}
+                  onValueChange={(v) => setConfig((prev) => ({ ...prev, categoryFieldId: v === '__none' ? null : v }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Wybierz pole" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none">Brak</SelectItem>
+                    {config.availableCategoryFields.map((field) => (
+                      <SelectItem key={field.id} value={field.id}>
+                        {field.name}{field.tagGroupName ? ` • ${field.tagGroupName}` : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setShowConfig(false)}>Anuluj</Button>
+                <Button onClick={saveDashboardConfig} disabled={savingConfig}>
+                  {savingConfig ? 'Zapisywanie...' : 'Zapisz'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          <AddExpenseDialog onExpenseAdded={loadDashboard} />
+        </div>
       </div>
 
       {/* Stats Cards — 4 cards like the reference */}
@@ -214,7 +309,7 @@ export default function DashboardPage() {
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <div className="flex h-[280px] items-center justify-center text-muted-foreground text-sm">
+              <div className="flex h-70 items-center justify-center text-muted-foreground text-sm">
                 Brak danych do wyświetlenia
               </div>
             )}
@@ -270,7 +365,7 @@ export default function DashboardPage() {
                 </div>
               </div>
             ) : (
-              <div className="flex h-[280px] items-center justify-center text-muted-foreground text-sm">
+              <div className="flex h-70 items-center justify-center text-muted-foreground text-sm">
                 Brak danych do wyświetlenia
               </div>
             )}

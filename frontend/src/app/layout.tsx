@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import { AuthProvider } from "@/lib/auth-context";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { AppToaster } from "@/components/AppToaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { InstallPrompt } from "@/components/InstallPrompt";
 import "./globals.css";
@@ -42,6 +43,7 @@ export default function RootLayout({
             <TooltipProvider>
               {children}
               <InstallPrompt />
+              <AppToaster />
             </TooltipProvider>
           </AuthProvider>
         </ThemeProvider>
@@ -50,7 +52,10 @@ export default function RootLayout({
             __html: `
               if ('serviceWorker' in navigator) {
                 window.addEventListener('load', () => {
-                  navigator.serviceWorker.register('/sw.js').catch(() => {});
+                  navigator.serviceWorker.register('/sw.js').then(function(reg) {
+                    // Check for SW updates periodically
+                    setInterval(function() { reg.update(); }, 60 * 60 * 1000);
+                  }).catch(() => {});
                 });
               }
             `,

@@ -20,7 +20,6 @@ export class BillActionsService {
     currency?: string;
     dueDay: number;
     frequency?: string;
-    categoryId?: string;
     notes?: string;
     paymentType?: string;
     autoCreateExpense?: boolean;
@@ -36,7 +35,6 @@ export class BillActionsService {
         currency: input.currency,
         dueDay: input.dueDay,
         frequency: (input.frequency as any) ?? undefined,
-        categoryId: input.categoryId,
         notes: input.notes,
         paymentType: (input.paymentType as any) ?? undefined,
         autoCreateExpense: input.autoCreateExpense,
@@ -97,6 +95,12 @@ export class BillActionsService {
     });
   }
 
+  async findBillPaymentById(paymentId: string, billId: string) {
+    return this.prisma.billPayment.findFirst({
+      where: { id: paymentId, billId },
+    });
+  }
+
   async findBillsByTagId(tagId: string, familyId: string) {
     return this.prisma.bill.findMany({
       where: {
@@ -115,7 +119,6 @@ export class BillActionsService {
     currency?: string;
     dueDay?: number;
     frequency?: string;
-    categoryId?: string;
     notes?: string;
     isActive?: boolean;
     paymentType?: string;
@@ -130,7 +133,6 @@ export class BillActionsService {
     if (input.currency !== undefined) data.currency = input.currency;
     if (input.dueDay !== undefined) data.dueDay = input.dueDay;
     if (input.frequency !== undefined) data.frequency = input.frequency;
-    if (input.categoryId !== undefined) data.categoryId = input.categoryId;
     if (input.notes !== undefined) data.notes = input.notes;
     if (input.isActive !== undefined) data.isActive = input.isActive;
     if (input.paymentType !== undefined) data.paymentType = input.paymentType;

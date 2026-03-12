@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, IsOptional, IsDateString, IsArray, ValidateNested, IsBoolean } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, IsOptional, IsDateString, IsArray, ValidateNested, IsBoolean, IsIn } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class ReceiptItemDto {
@@ -72,6 +72,18 @@ export class CreateReceiptDto {
   tagIds?: string[];
 
   @IsOptional()
+  @IsIn(['PENDING', 'COMPLETED', 'FAILED'])
+  ocrStatus?: 'PENDING' | 'COMPLETED' | 'FAILED';
+
+  @IsOptional()
+  @IsString()
+  ocrError?: string;
+
+  @IsOptional()
   @IsBoolean()
-  autoCreateExpense?: boolean;
+  isApproved?: boolean;
+
+  @IsOptional()
+  @IsDateString()
+  approvedAt?: string;
 }

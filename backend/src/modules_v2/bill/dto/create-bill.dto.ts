@@ -49,10 +49,6 @@ export class CreateBillDto {
 
   @IsOptional()
   @IsString()
-  categoryId?: string;
-
-  @IsOptional()
-  @IsString()
   notes?: string;
 
   @IsOptional()
