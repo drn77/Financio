@@ -61,6 +61,25 @@ Po deployu backend będzie dostępny pod adresem: `https://financio-api.fly.dev`
 
 Migracja uruchamia się automatycznie przy starcie kontenera (`prisma migrate deploy`).
 
+### Stabilizacja deploy na Fly.io (ważne)
+
+W `fly.toml` są ustawione 2 zabezpieczenia, które ograniczają losowe nieudane wdrożenia:
+
+1. `release_command` ma retry (3 próby) dla `prisma migrate deploy`.
+Powód: Neon/Fly potrafi zwrócić chwilowy timeout na advisory lock Prisma (`P1002`) mimo poprawnej konfiguracji bazy.
+
+2. `min_machines_running = 1`.
+Powód: utrzymanie jednej "ciepłej" maszyny zmniejsza cold starty i ryzyko chwilowej niedostępności po deployu.
+
+Przykład fragmentu `fly.toml`:
+```toml
+[deploy]
+release_command = "sh -lc 'for i in 1 2 3; do npx prisma migrate deploy && exit 0; echo release_command retry $i; sleep 5; done; exit 1'"
+
+[http_service]
+min_machines_running = 1
+```
+
 Aby zasilić bazę seed'em:
 ```bash
 fly ssh console
