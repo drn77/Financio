@@ -56,11 +56,13 @@ interface IKanbanColumnBoard extends IKanbanColumnConfig {
 }
 
 const OBJECT_TYPE_LABEL: Record<KanbanObjectType, string> = {
-  bill: 'Rachunki',
+  bill: 'Cykliczne wydatki',
   expense: 'Wydatki',
-  'fixed-expense': 'Stałe wydatki',
+  'fixed-expense': 'Ukryte',
   receipt: 'Paragony',
 };
+
+const VISIBLE_OBJECT_TYPES: KanbanObjectType[] = ['bill', 'expense', 'receipt'];
 
 function formatPLN(value: number, currency = 'PLN') {
   return new Intl.NumberFormat('pl-PL', { style: 'currency', currency }).format(value);
@@ -87,7 +89,7 @@ export default function KanbanPage() {
   const [typeFilter, setTypeFilter] = useState<Record<KanbanObjectType, boolean>>({
     bill: true,
     expense: true,
-    'fixed-expense': true,
+    'fixed-expense': false,
     receipt: true,
   });
 
@@ -111,8 +113,19 @@ export default function KanbanPage() {
         api.getTagGroups(),
       ]);
 
-      setColumnsConfig(config.columns ?? []);
-      setBoardColumns(board.columns ?? []);
+      const sanitizedConfig = (config.columns ?? []).map((col: IKanbanColumnConfig) => ({
+        ...col,
+        objectTypes: (col.objectTypes ?? []).filter((t) => t !== 'fixed-expense'),
+      }));
+
+      const sanitizedBoard = (board.columns ?? []).map((col: IKanbanColumnBoard) => ({
+        ...col,
+        objectTypes: (col.objectTypes ?? []).filter((t) => t !== 'fixed-expense'),
+        cards: (col.cards ?? []).filter((card) => card.objectType !== 'fixed-expense'),
+      }));
+
+      setColumnsConfig(sanitizedConfig);
+      setBoardColumns(sanitizedBoard);
       setTagGroups(Array.isArray(groups) ? groups : []);
     } catch (e) {
       console.error('Failed to load kanban', e);
@@ -235,7 +248,9 @@ export default function KanbanPage() {
 
     return boardColumns.map((col) => ({
       ...col,
-      cards: col.cards.filter((card) => enabledTypes.includes(card.objectType)),
+      cards: col.cards.filter(
+        (card) => card.objectType !== 'fixed-expense' && enabledTypes.includes(card.objectType),
+      ),
     }));
   }, [boardColumns, typeFilter]);
 
@@ -279,7 +294,6 @@ export default function KanbanPage() {
   const gotoSource = () => {
     if (!selectedCard) return;
     if (selectedCard.objectType === 'bill') router.push('/bills');
-    else if (selectedCard.objectType === 'fixed-expense') router.push('/fixed-expenses');
     else if (selectedCard.objectType === 'receipt') router.push('/receipts');
     else router.push('/expenses');
     setCardDetailsOpen(false);
@@ -351,7 +365,7 @@ export default function KanbanPage() {
                       <div className="space-y-2">
                         <Label>Typy obiektów</Label>
                         <div className="grid grid-cols-2 gap-2">
-                          {(Object.keys(OBJECT_TYPE_LABEL) as KanbanObjectType[]).map((type) => (
+                          {VISIBLE_OBJECT_TYPES.map((type) => (
                             <label key={type} className="flex items-center gap-2 rounded border p-2 text-sm">
                               <Checkbox
                                 checked={newColumnObjectTypes.includes(type)}
@@ -412,7 +426,7 @@ export default function KanbanPage() {
                                   </SelectContent>
                                 </Select>
                                 <div className="grid grid-cols-2 gap-1">
-                                  {(Object.keys(OBJECT_TYPE_LABEL) as KanbanObjectType[]).map((type) => (
+                                  {VISIBLE_OBJECT_TYPES.map((type) => (
                                     <label key={type} className="flex items-center gap-2 rounded border p-1 text-xs">
                                       <Checkbox
                                         checked={col.objectTypes.includes(type)}
@@ -455,7 +469,7 @@ export default function KanbanPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {(Object.keys(OBJECT_TYPE_LABEL) as KanbanObjectType[]).map((type) => (
+                    {VISIBLE_OBJECT_TYPES.map((type) => (
                       <label key={type} className="flex items-center gap-2 rounded border p-2 text-sm">
                         <Checkbox
                           checked={typeFilter[type]}
@@ -552,16 +566,6 @@ export default function KanbanPage() {
                   <div className="grid grid-cols-2 gap-2">
                     <div><Label>Kwota</Label><Input type="number" value={cardDetailData.amount ?? 0} onChange={(e) => setCardDetailData((p) => ({ ...(p ?? {}), amount: Number(e.target.value || 0) }))} /></div>
                     <div><Label>Dzień terminu</Label><Input type="number" min={1} max={31} value={cardDetailData.dueDay ?? 1} onChange={(e) => setCardDetailData((p) => ({ ...(p ?? {}), dueDay: Number(e.target.value || 1) }))} /></div>
-                  </div>
-                </>
-              )}
-
-              {selectedCard.objectType === 'fixed-expense' && (
-                <>
-                  <div><Label>Nazwa</Label><Input value={cardDetailData.name ?? ''} onChange={(e) => setCardDetailData((p) => ({ ...(p ?? {}), name: e.target.value }))} /></div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div><Label>Kwota</Label><Input type="number" value={cardDetailData.amount ?? 0} onChange={(e) => setCardDetailData((p) => ({ ...(p ?? {}), amount: Number(e.target.value || 0) }))} /></div>
-                    <div><Label>Następny termin</Label><Input type="date" value={cardDetailData.nextDueDate ?? ''} onChange={(e) => setCardDetailData((p) => ({ ...(p ?? {}), nextDueDate: e.target.value }))} /></div>
                   </div>
                 </>
               )}

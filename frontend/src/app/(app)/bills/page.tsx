@@ -350,9 +350,9 @@ export default function BillsPage() {
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Rachunki</h1>
+          <h1 className="text-2xl font-bold">Cykliczne wydatki</h1>
           <p className="text-sm text-muted-foreground">
-            Zarządzaj cyklicznymi rachunkami i śledź płatności
+            Zarządzaj cyklicznymi wydatkami i śledź płatności
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -375,7 +375,7 @@ export default function BillsPage() {
             </Button>
           </div>
           <Button size="sm" onClick={_handleOpenCreate}>
-            <Plus className="mr-1 h-4 w-4" /> Dodaj rachunek
+            <Plus className="mr-1 h-4 w-4" /> Dodaj cykliczny wydatek
           </Button>
         </div>
       </div>
@@ -435,12 +435,12 @@ export default function BillsPage() {
           {sortedBills.length === 0 ? (
             <div className="flex flex-col items-center justify-center rounded-lg border border-dashed py-12">
               <p className="text-muted-foreground">
-                {bills.length === 0 ? 'Brak rachunków' : 'Brak rachunków pasujących do filtrów'}
+                {bills.length === 0 ? 'Brak cyklicznych wydatków' : 'Brak cyklicznych wydatków pasujących do filtrów'}
               </p>
               {bills.length === 0 && (
                 <Button variant="outline" size="sm" className="mt-3" onClick={_handleOpenCreate}>
                   <Plus className="mr-1 h-4 w-4" />
-                  Dodaj pierwszy rachunek
+                  Dodaj pierwszy cykliczny wydatek
                 </Button>
               )}
             </div>
@@ -500,7 +500,7 @@ export default function BillsPage() {
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Usunąć rachunek?</AlertDialogTitle>
+            <AlertDialogTitle>Usunąć cykliczny wydatek?</AlertDialogTitle>
             <AlertDialogDescription>
               Czy na pewno chcesz usunąć &quot;{deleteTarget?.name}&quot;? Tej operacji nie można cofnąć.
             </AlertDialogDescription>

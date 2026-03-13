@@ -43,7 +43,7 @@ export function BillFilters({ filters, onFiltersChange, tags }: Props) {
           <Input
             value={filters.search}
             onChange={(e) => onFiltersChange({ ...filters, search: e.target.value })}
-            placeholder="Szukaj rachunku..."
+            placeholder="Wyszukaj cykliczne wydatki..."
             className="pl-9"
           />
         </div>

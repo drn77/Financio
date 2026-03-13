@@ -25,7 +25,7 @@ interface ISummary {
   pendingReceiptOcrCount: number;
   upcomingPlannedPayments: Array<{
     id: string;
-    source: 'bill' | 'fixed-expense' | 'savings';
+    source: 'bill' | 'savings';
     name: string;
     amount: number;
     currency: string;
@@ -50,9 +50,8 @@ function formatDate(date: string): string {
   });
 }
 
-function sourceLabel(source: 'bill' | 'fixed-expense' | 'savings'): string {
+function sourceLabel(source: 'bill' | 'savings'): string {
   if (source === 'bill') return 'Rachunek';
-  if (source === 'fixed-expense') return 'Stały';
   return 'Oszczędność';
 }
 
@@ -60,7 +59,27 @@ function useSummary() {
   const [summary, setSummary] = useState<ISummary | null>(null);
 
   const refresh = useCallback(() => {
-    api.getDashboardSummary().then(setSummary).catch(() => {});
+    api.getDashboardSummary()
+      .then((data) => {
+        const upcomingPlannedPayments = (data.upcomingPlannedPayments ?? []).filter(
+          (
+            payment,
+          ): payment is {
+            id: string;
+            source: 'bill' | 'savings';
+            name: string;
+            amount: number;
+            currency: string;
+            dueDate: string;
+          } => payment.source === 'bill' || payment.source === 'savings',
+        );
+
+        setSummary({
+          ...data,
+          upcomingPlannedPayments,
+        });
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -114,14 +133,6 @@ export function TopBar() {
           dueDay: Number(bill.dueDay ?? 1),
           notes: bill.notes ?? '',
         });
-      } else if (payment.source === 'fixed-expense') {
-        const fixed = await api.getFixedExpense(payment.id);
-        setEditData({
-          name: fixed.name,
-          amount: Number(fixed.amount ?? payment.amount ?? 0),
-          nextDueDate: fixed.nextDueDate ? new Date(fixed.nextDueDate).toISOString().split('T')[0] : '',
-          notes: fixed.notes ?? '',
-        });
       } else {
         const goals = await api.getSavingsGoals();
         const goal = (goals ?? []).find((g: any) => g.id === payment.id);
@@ -155,12 +166,6 @@ export function TopBar() {
           dueDate: selectedPayment.dueDate,
           notes: payNotes || undefined,
         });
-      } else if (selectedPayment.source === 'fixed-expense') {
-        await api.payFixedExpense(selectedPayment.id, {
-          amount,
-          paidAt: new Date().toISOString(),
-          notes: payNotes || undefined,
-        });
       } else {
         await api.addDeposit(selectedPayment.id, {
           amount,
@@ -190,13 +195,6 @@ export function TopBar() {
           dueDay: Number(editData.dueDay || 1),
           notes: editData.notes || undefined,
         });
-      } else if (selectedPayment.source === 'fixed-expense') {
-        await api.updateFixedExpense(selectedPayment.id, {
-          name: editData.name,
-          amount: Number(editData.amount || 0),
-          nextDueDate: editData.nextDueDate || undefined,
-          notes: editData.notes || undefined,
-        });
       } else {
         await api.updateSavingsGoal(selectedPayment.id, {
           name: editData.name,
@@ -216,7 +214,6 @@ export function TopBar() {
   const gotoSource = () => {
     if (!selectedPayment) return;
     if (selectedPayment.source === 'bill') router.push('/bills');
-    else if (selectedPayment.source === 'fixed-expense') router.push('/fixed-expenses');
     else router.push('/savings');
     setShowPaymentDialog(false);
   };
@@ -379,16 +376,6 @@ export function TopBar() {
                     <div className="grid grid-cols-2 gap-2">
                       <div><Label>Kwota</Label><Input type="number" value={editData.amount ?? 0} onChange={(e) => setEditData((p) => ({ ...(p ?? {}), amount: Number(e.target.value || 0) }))} /></div>
                       <div><Label>Dzień terminu</Label><Input type="number" min={1} max={31} value={editData.dueDay ?? 1} onChange={(e) => setEditData((p) => ({ ...(p ?? {}), dueDay: Number(e.target.value || 1) }))} /></div>
-                    </div>
-                  </>
-                )}
-
-                {selectedPayment.source === 'fixed-expense' && (
-                  <>
-                    <div><Label>Nazwa</Label><Input value={editData.name ?? ''} onChange={(e) => setEditData((p) => ({ ...(p ?? {}), name: e.target.value }))} /></div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div><Label>Kwota</Label><Input type="number" value={editData.amount ?? 0} onChange={(e) => setEditData((p) => ({ ...(p ?? {}), amount: Number(e.target.value || 0) }))} /></div>
-                      <div><Label>Następny termin</Label><Input type="date" value={editData.nextDueDate ?? ''} onChange={(e) => setEditData((p) => ({ ...(p ?? {}), nextDueDate: e.target.value }))} /></div>
                     </div>
                   </>
                 )}
