@@ -21,6 +21,11 @@ export class DashboardController {
     return this.dashboardContext.getSummary(familyId);
   }
 
+  @Get('statistics')
+  async getStatistics(@FamilyId() familyId: string) {
+    return this.dashboardContext.getStatistics(familyId);
+  }
+
   @Get('config')
   async getConfig(@FamilyId() familyId: string) {
     return this.dashboardContext.getConfig(familyId);

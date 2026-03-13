@@ -54,7 +54,7 @@ export class FamilyContextService {
     return (family as any).tagMappings ?? {};
   }
 
-  async updateTagMappings(familyId: string, data: { income?: string; expense?: string; planning?: string; costs?: string }) {
+  async updateTagMappings(familyId: string, data: { income?: string; expense?: string; planning?: string; costs?: string; savings?: string }) {
     return this.familyActions.updateTagMappings(familyId, data);
   }
   // #endregion

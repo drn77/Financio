@@ -135,7 +135,7 @@ export default function ExpensesPage() {
   const [categories, setCategories] = useState<any[]>([]);
   const [familyMembers, setFamilyMembers] = useState<any[]>([]);
   const [tagGroups, setTagGroups] = useState<any[]>([]);
-  const [tagMappings, setTagMappings] = useState<{ income?: string; expense?: string; planning?: string; costs?: string }>({});
+  const [tagMappings, setTagMappings] = useState<{ income?: string; expense?: string; planning?: string; costs?: string; savings?: string }>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [receiptDialogOpen, setReceiptDialogOpen] = useState(false);
@@ -831,7 +831,7 @@ function CellEditor({
   categoryColorMap: Record<string, string>;
   tagGroups: any[];
   tagColorMap: Record<string, string>;
-  tagMappings: { income?: string; expense?: string; planning?: string; costs?: string };
+  tagMappings: { income?: string; expense?: string; planning?: string; costs?: string; savings?: string };
   rowData: Record<string, any>;
   columns: ColumnDef[];
 }) {

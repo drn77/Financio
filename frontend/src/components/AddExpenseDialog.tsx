@@ -46,7 +46,7 @@ export function AddExpenseDialog({ onExpenseAdded }: AddExpenseDialogProps) {
   const [step, setStep] = useState<Step>('categories');
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [templateColumns, setTemplateColumns] = useState<ITemplateColumn[]>([]);
-  const [tagMappings, setTagMappings] = useState<{ income?: string; expense?: string; planning?: string; costs?: string }>({});
+  const [tagMappings, setTagMappings] = useState<{ income?: string; expense?: string; planning?: string; costs?: string; savings?: string }>({});
   const [tagIdToName, setTagIdToName] = useState<Record<string, string>>({});
   const [tagIdToGroupId, setTagIdToGroupId] = useState<Record<string, string>>({});
   const [configuredFieldId, setConfiguredFieldId] = useState<string | null>(null);

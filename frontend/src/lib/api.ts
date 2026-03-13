@@ -319,7 +319,7 @@ class ApiClient {
     return this._request('/api/v2/family/tag-mappings');
   }
 
-  async updateTagMappings(mappings: { income?: string; expense?: string; planning?: string; costs?: string }): Promise<Record<string, string>> {
+  async updateTagMappings(mappings: { income?: string; expense?: string; planning?: string; costs?: string; savings?: string }): Promise<Record<string, string>> {
     return this._request('/api/v2/family/tag-mappings', { method: 'PUT', body: JSON.stringify(mappings) });
   }
 
@@ -625,6 +625,10 @@ class ApiClient {
     }>;
   }> {
     return this._request('/api/v2/dashboard/summary');
+  }
+
+  async getDashboardStatistics(): Promise<AnyRecord> {
+    return this._request('/api/v2/dashboard/statistics');
   }
 
   async getDashboardConfig(): Promise<{

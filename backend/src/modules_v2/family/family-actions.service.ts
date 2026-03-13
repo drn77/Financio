@@ -78,7 +78,7 @@ export class FamilyActionsService {
   // #region Update
   async updateTagMappings(
     familyId: string,
-    tagMappings: { income?: string; expense?: string; planning?: string; costs?: string },
+    tagMappings: { income?: string; expense?: string; planning?: string; costs?: string; savings?: string },
   ) {
     return this.prisma.family.update({
       where: { id: familyId },

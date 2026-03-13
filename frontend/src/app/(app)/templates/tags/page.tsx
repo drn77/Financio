@@ -113,7 +113,7 @@ export default function TagsPage() {
   const [showTagForm, setShowTagForm] = useState(false);
 
   // Tag mappings
-  const [tagMappings, setTagMappings] = useState<{ income?: string; expense?: string; planning?: string; costs?: string }>({});
+  const [tagMappings, setTagMappings] = useState<{ income?: string; expense?: string; planning?: string; costs?: string; savings?: string }>({});
   const [savingMappings, setSavingMappings] = useState(false);
 
   // Drag state for tags within edit dialog
@@ -309,7 +309,7 @@ export default function TagsPage() {
 
   const allTags = groups.flatMap((g) => g.tags.map((t) => ({ ...t, groupName: g.name })));
 
-  const handleMappingChange = async (key: 'income' | 'expense' | 'planning' | 'costs', tagId: string) => {
+  const handleMappingChange = async (key: 'income' | 'expense' | 'planning' | 'costs' | 'savings', tagId: string) => {
     const updated = { ...tagMappings, [key]: tagId || undefined };
     if (!tagId) delete updated[key];
     setTagMappings(updated);
@@ -464,12 +464,13 @@ export default function TagsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
               {([
                 { key: 'income' as const, label: 'Przychód', color: 'text-green-600 dark:text-green-400' },
                 { key: 'expense' as const, label: 'Wydatek', color: 'text-red-600 dark:text-red-400' },
                 { key: 'planning' as const, label: 'Planowanie', color: 'text-blue-600 dark:text-blue-400' },
                 { key: 'costs' as const, label: 'Koszty podatkowe', color: 'text-amber-600 dark:text-amber-400' },
+                { key: 'savings' as const, label: 'Oszczędności', color: 'text-emerald-600 dark:text-emerald-400' },
               ]).map(({ key, label, color }) => (
                 <div key={key} className="space-y-1.5">
                   <Label className={`text-sm font-medium ${color}`}>{label}</Label>

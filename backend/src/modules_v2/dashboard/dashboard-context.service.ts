@@ -39,6 +39,74 @@ export interface IDashboardSummary {
   pendingReceiptOcrCount: number;
 }
 
+export interface IStatisticsMonth {
+  monthKey: string;
+  monthLabel: string;
+  year: number;
+  month: number;
+  income: number;
+  expenses: number;
+  balance: number;
+  savings: number;
+  savingsRate: number;
+}
+
+export interface IStatisticsSeriesPoint {
+  monthKey: string;
+  monthLabel: string;
+  income: number;
+  expenses: number;
+  balance: number;
+  savings: number;
+}
+
+export interface IStatisticsCategoryTotal {
+  name: string;
+  amount: number;
+}
+
+export interface IStatisticsResponse {
+  months: IStatisticsMonth[];
+  averageIncome: number;
+  averageExpenses: number;
+  averageBalance: number;
+  averageSavings: number;
+  averageSavingsRate: number;
+  medianMonthlyExpenses: number;
+  incomeStdDev: number;
+  expensesStdDev: number;
+  balanceForecast: {
+    nextMonth: number;
+    inTwoMonths: number;
+    inThreeMonths: number;
+  };
+  topGrowthCategories: Array<{
+    category: string;
+    currentAmount: number;
+    previousAmount: number;
+    delta: number;
+    growthRate: number;
+  }>;
+  fixedVsVariable: {
+    fixedAmount: number;
+    variableAmount: number;
+    fixedShare: number;
+    variableShare: number;
+  };
+  savingsEffectiveness: {
+    averageEffectiveness: number;
+    monthly: Array<{
+      monthKey: string;
+      monthLabel: string;
+      planned: number;
+      actual: number;
+      effectiveness: number;
+    }>;
+  };
+  categoryTotals: IStatisticsCategoryTotal[];
+  series: IStatisticsSeriesPoint[];
+}
+
 export interface IDashboardCategoryFieldOption {
   id: string;
   name: string;
@@ -195,7 +263,7 @@ export class DashboardContextService {
   private _classifyRecord(
     data: any,
     columns: any[],
-    tagMappings: { income?: string; expense?: string; planning?: string },
+    tagMappings: { income?: string; expense?: string; planning?: string; savings?: string },
     tagIdToName: Record<string, string>,
   ): 'income' | 'expense' | 'planning' | null {
     const hasAnyMapping = tagMappings.income || tagMappings.expense || tagMappings.planning;
@@ -229,9 +297,10 @@ export class DashboardContextService {
    */
   private async _buildTagIdToNameMap(
     familyId: string,
-    tagMappings: { income?: string; expense?: string; planning?: string },
+    tagMappings: { income?: string; expense?: string; planning?: string; savings?: string },
   ): Promise<Record<string, string>> {
-    const tagIds = [tagMappings.income, tagMappings.expense, tagMappings.planning].filter(Boolean) as string[];
+    const tagIds = [tagMappings.income, tagMappings.expense, tagMappings.planning, tagMappings.savings]
+      .filter(Boolean) as string[];
     if (tagIds.length === 0) return {};
 
     const tags = await this.prisma.tag.findMany({
@@ -259,6 +328,74 @@ export class DashboardContextService {
     if (currencyCol) return this._extractAmount(data?.[currencyCol.id]);
 
     return 0;
+  }
+
+  private _readTagValues(data: any, columns: any[]): string[] {
+    const result: string[] = [];
+    const tagGroupCols = columns.filter((c: any) => c.type === 'tag_group');
+    for (const col of tagGroupCols) {
+      const value = data?.[col.id];
+      if (Array.isArray(value)) {
+        for (const entry of value) {
+          if (typeof entry === 'string') result.push(entry);
+        }
+      } else if (typeof value === 'string') {
+        result.push(value);
+      }
+    }
+    return result;
+  }
+
+  private _extractRecordDate(data: any, createdAt: Date): Date {
+    const raw = data?.col_date;
+    if (typeof raw === 'string') {
+      const parsed = new Date(raw);
+      if (!Number.isNaN(parsed.getTime())) return parsed;
+    }
+    return createdAt;
+  }
+
+  private _monthKey(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
+  }
+
+  private _monthLabel(year: number, month: number): string {
+    const date = new Date(year, month - 1, 1);
+    return date.toLocaleDateString('pl-PL', { month: 'short', year: 'numeric' });
+  }
+
+  private _frequencyToMonthlyMultiplier(frequency?: string): number {
+    switch (frequency) {
+      case 'DAILY': return 30;
+      case 'WEEKLY': return 4.33;
+      case 'QUARTERLY': return 1 / 3;
+      case 'YEARLY': return 1 / 12;
+      case 'MONTHLY':
+      default:
+        return 1;
+    }
+  }
+
+  private _round2(value: number): number {
+    return Math.round(value * 100) / 100;
+  }
+
+  private _stdDev(values: number[]): number {
+    if (!values.length) return 0;
+    const avg = values.reduce((sum, value) => sum + value, 0) / values.length;
+    const variance = values.reduce((sum, value) => sum + ((value - avg) ** 2), 0) / values.length;
+    return Math.sqrt(variance);
+  }
+
+  private _median(values: number[]): number {
+    if (!values.length) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 0
+      ? (sorted[mid - 1] + sorted[mid]) / 2
+      : sorted[mid];
   }
   // #endregion
 
@@ -531,6 +668,304 @@ export class DashboardContextService {
       plannedCosts: Math.round(plannedCosts * 100) / 100,
       upcomingPlannedPayments: top4Upcoming,
       pendingReceiptOcrCount,
+    };
+  }
+
+  async getStatistics(familyId: string): Promise<IStatisticsResponse> {
+    const [family, defaultTemplate, bills, fixedExpenses, savingsGoals] = await Promise.all([
+      this.prisma.family.findUnique({ where: { id: familyId }, select: { tagMappings: true, dashboardConfig: true } }),
+      this.prisma.template.findFirst({
+        where: { familyId, isDefault: true },
+        include: {
+          records: {
+            orderBy: { createdAt: 'asc' },
+          },
+        },
+      }),
+      this.prisma.bill.findMany({
+        where: { familyId, isActive: true },
+        select: { amount: true, frequency: true },
+      }),
+      this.prisma.fixedExpense.findMany({
+        where: { familyId, isActive: true },
+        select: { amount: true, frequency: true },
+      }),
+      this.prisma.savingsGoal.findMany({
+        where: { familyId },
+        include: { deposits: true },
+      }),
+    ]);
+
+    if (!defaultTemplate) {
+      return {
+        months: [],
+        averageIncome: 0,
+        averageExpenses: 0,
+        averageBalance: 0,
+        averageSavings: 0,
+        averageSavingsRate: 0,
+        medianMonthlyExpenses: 0,
+        incomeStdDev: 0,
+        expensesStdDev: 0,
+        balanceForecast: { nextMonth: 0, inTwoMonths: 0, inThreeMonths: 0 },
+        topGrowthCategories: [],
+        fixedVsVariable: { fixedAmount: 0, variableAmount: 0, fixedShare: 0, variableShare: 0 },
+        savingsEffectiveness: { averageEffectiveness: 0, monthly: [] },
+        categoryTotals: [],
+        series: [],
+      };
+    }
+
+    const tagMappings = ((family?.tagMappings as any) ?? {}) as {
+      income?: string;
+      expense?: string;
+      planning?: string;
+      savings?: string;
+    };
+    const dashboardConfig = this._normalizeDashboardConfig((family?.dashboardConfig as any) ?? {});
+    const columns: any[] = Array.isArray(defaultTemplate.columns) ? (defaultTemplate.columns as any[]) : [];
+    const tagIdToName = await this._buildTagIdToNameMap(familyId, tagMappings);
+    const savingsTagName = tagMappings.savings ? tagIdToName[tagMappings.savings] : undefined;
+    const categoryFieldId = dashboardConfig.categoryFieldId && columns.some((c: any) => c?.id === dashboardConfig.categoryFieldId)
+      ? dashboardConfig.categoryFieldId
+      : null;
+
+    const monthly = new Map<string, {
+      year: number;
+      month: number;
+      income: number;
+      expenses: number;
+      savings: number;
+    }>();
+    const categoryTotals = new Map<string, number>();
+    const categoryByMonth = new Map<string, Map<string, number>>();
+
+    for (const record of defaultTemplate.records) {
+      const data = (record as any).data ?? {};
+      const recordDate = this._extractRecordDate(data, (record as any).createdAt);
+      const monthKey = this._monthKey(recordDate);
+      const bucket = monthly.get(monthKey) ?? {
+        year: recordDate.getFullYear(),
+        month: recordDate.getMonth() + 1,
+        income: 0,
+        expenses: 0,
+        savings: 0,
+      };
+
+      const amount = this._extractRecordAmount(data, columns);
+      const classification = this._classifyRecord(data, columns, tagMappings, tagIdToName);
+      const tagValues = this._readTagValues(data, columns);
+
+      if (classification === 'income') {
+        bucket.income += amount;
+      } else if (classification === 'expense') {
+        bucket.expenses += amount;
+
+        if (savingsTagName && tagValues.includes(savingsTagName)) {
+          bucket.savings += amount;
+        }
+
+        const categoryName = categoryFieldId && data?.[categoryFieldId]
+          ? (Array.isArray(data[categoryFieldId]) ? data[categoryFieldId][0] : data[categoryFieldId])
+          : (data?.col_category ?? 'Bez kategorii');
+
+        if (typeof categoryName === 'string' && categoryName.trim()) {
+          categoryTotals.set(categoryName, (categoryTotals.get(categoryName) ?? 0) + amount);
+          const monthCategories = categoryByMonth.get(monthKey) ?? new Map<string, number>();
+          monthCategories.set(categoryName, (monthCategories.get(categoryName) ?? 0) + amount);
+          categoryByMonth.set(monthKey, monthCategories);
+        }
+      }
+
+      monthly.set(monthKey, bucket);
+    }
+
+    const months = Array.from(monthly.entries())
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([monthKey, bucket]) => {
+        const balance = bucket.income - bucket.expenses;
+        const savingsRate = bucket.income > 0 ? (bucket.savings / bucket.income) * 100 : 0;
+        return {
+          monthKey,
+          monthLabel: this._monthLabel(bucket.year, bucket.month),
+          year: bucket.year,
+          month: bucket.month,
+          income: Math.round(bucket.income * 100) / 100,
+          expenses: Math.round(bucket.expenses * 100) / 100,
+          balance: Math.round(balance * 100) / 100,
+          savings: Math.round(bucket.savings * 100) / 100,
+          savingsRate: Math.round(savingsRate * 10) / 10,
+        };
+      });
+
+    const monthCount = months.length || 1;
+    const sumIncome = months.reduce((sum, month) => sum + month.income, 0);
+    const sumExpenses = months.reduce((sum, month) => sum + month.expenses, 0);
+    const sumBalance = months.reduce((sum, month) => sum + month.balance, 0);
+    const sumSavings = months.reduce((sum, month) => sum + month.savings, 0);
+    const medianMonthlyExpenses = this._median(months.map((month) => month.expenses));
+    const incomeStdDev = this._stdDev(months.map((month) => month.income));
+    const expensesStdDev = this._stdDev(months.map((month) => month.expenses));
+
+    const sortedChronological = [...months].reverse();
+    const rollingBalances = sortedChronological.map((month) => month.balance);
+    const seedWindow = rollingBalances.slice(Math.max(0, rollingBalances.length - 3));
+    const window = seedWindow.length > 0 ? [...seedWindow] : [0, 0, 0];
+    const forecast: number[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const avg = window.reduce((sum, value) => sum + value, 0) / window.length;
+      forecast.push(this._round2(avg));
+      window.push(avg);
+      if (window.length > 3) window.shift();
+    }
+
+    const monthlyFixedFromBills = bills.reduce((sum, bill) => {
+      return sum + (Number((bill as any).amount ?? 0) * this._frequencyToMonthlyMultiplier((bill as any).frequency));
+    }, 0);
+    const monthlyFixedFromFixedExpenses = fixedExpenses.reduce((sum, fixed) => {
+      return sum + (Number((fixed as any).amount ?? 0) * this._frequencyToMonthlyMultiplier((fixed as any).frequency));
+    }, 0);
+    const fixedAmount = this._round2(monthlyFixedFromBills + monthlyFixedFromFixedExpenses);
+    const avgExpenses = sumExpenses / monthCount;
+    const variableAmount = this._round2(Math.max(avgExpenses - fixedAmount, 0));
+    const fixedVariableTotal = Math.max(fixedAmount + variableAmount, 0.0001);
+    const fixedShare = this._round2((fixedAmount / fixedVariableTotal) * 100);
+    const variableShare = this._round2((variableAmount / fixedVariableTotal) * 100);
+
+    const monthKeysDesc = months.map((month) => month.monthKey);
+    const savingsEffectivenessMonthly = monthKeysDesc.map((monthKey) => {
+      const monthData = months.find((item) => item.monthKey === monthKey);
+      if (!monthData) {
+        return { monthKey, monthLabel: monthKey, planned: 0, actual: 0, effectiveness: 0 };
+      }
+
+      const monthStart = new Date(monthData.year, monthData.month - 1, 1);
+      const monthEnd = new Date(monthData.year, monthData.month, 0, 23, 59, 59);
+      const actual = this._round2(monthData.savings);
+
+      let planned = 0;
+      for (const goal of savingsGoals) {
+        if (!goal.deadline) continue;
+        const deadline = new Date(goal.deadline);
+        if (deadline < monthStart) continue;
+
+        const depositedToDate = goal.deposits
+          .filter((deposit) => new Date((deposit as any).date) <= monthEnd)
+          .reduce((sum, deposit) => sum + Number((deposit as any).amount ?? 0), 0);
+
+        const remaining = Math.max(0, Number((goal as any).targetAmount ?? 0) - depositedToDate);
+        const monthsLeft = Math.max(
+          1,
+          ((deadline.getFullYear() - monthStart.getFullYear()) * 12)
+          + (deadline.getMonth() - monthStart.getMonth())
+          + 1,
+        );
+
+        planned += remaining / monthsLeft;
+      }
+
+      planned = this._round2(planned);
+      const effectiveness = planned > 0
+        ? this._round2((actual / planned) * 100)
+        : (actual > 0 ? 100 : 0);
+
+      return {
+        monthKey,
+        monthLabel: monthData.monthLabel,
+        planned,
+        actual,
+        effectiveness,
+      };
+    });
+
+    const avgSavingsEffectiveness = savingsEffectivenessMonthly.length > 0
+      ? this._round2(
+          savingsEffectivenessMonthly.reduce((sum, item) => sum + item.effectiveness, 0)
+          / savingsEffectivenessMonthly.length,
+        )
+      : 0;
+
+    const topGrowthCategories = (() => {
+      if (monthKeysDesc.length < 2) return [] as Array<{
+        category: string;
+        currentAmount: number;
+        previousAmount: number;
+        delta: number;
+        growthRate: number;
+      }>;
+
+      const latestKey = monthKeysDesc[0];
+      const previousKey = monthKeysDesc[1];
+      const latest = categoryByMonth.get(latestKey) ?? new Map<string, number>();
+      const previous = categoryByMonth.get(previousKey) ?? new Map<string, number>();
+
+      const rows: Array<{
+        category: string;
+        currentAmount: number;
+        previousAmount: number;
+        delta: number;
+        growthRate: number;
+      }> = [];
+
+      for (const [category, currentAmountRaw] of latest.entries()) {
+        const currentAmount = Number(currentAmountRaw ?? 0);
+        const previousAmount = Number(previous.get(category) ?? 0);
+        const delta = currentAmount - previousAmount;
+        const growthRate = previousAmount > 0 ? (delta / previousAmount) * 100 : (currentAmount > 0 ? 100 : 0);
+        rows.push({
+          category,
+          currentAmount: this._round2(currentAmount),
+          previousAmount: this._round2(previousAmount),
+          delta: this._round2(delta),
+          growthRate: this._round2(growthRate),
+        });
+      }
+
+      return rows
+        .filter((row) => row.delta > 0)
+        .sort((a, b) => b.growthRate - a.growthRate)
+        .slice(0, 5);
+    })();
+
+    return {
+      months,
+      averageIncome: this._round2(sumIncome / monthCount),
+      averageExpenses: this._round2(sumExpenses / monthCount),
+      averageBalance: this._round2(sumBalance / monthCount),
+      averageSavings: this._round2(sumSavings / monthCount),
+      averageSavingsRate: sumIncome > 0 ? Math.round((sumSavings / sumIncome) * 1000) / 10 : 0,
+      medianMonthlyExpenses: this._round2(medianMonthlyExpenses),
+      incomeStdDev: this._round2(incomeStdDev),
+      expensesStdDev: this._round2(expensesStdDev),
+      balanceForecast: {
+        nextMonth: forecast[0] ?? 0,
+        inTwoMonths: forecast[1] ?? 0,
+        inThreeMonths: forecast[2] ?? 0,
+      },
+      topGrowthCategories,
+      fixedVsVariable: {
+        fixedAmount,
+        variableAmount,
+        fixedShare,
+        variableShare,
+      },
+      savingsEffectiveness: {
+        averageEffectiveness: avgSavingsEffectiveness,
+        monthly: savingsEffectivenessMonthly,
+      },
+      categoryTotals: Array.from(categoryTotals.entries())
+        .map(([name, amount]) => ({ name, amount: Math.round(amount * 100) / 100 }))
+        .sort((a, b) => b.amount - a.amount),
+      series: [...months]
+        .reverse()
+        .map((month) => ({
+          monthKey: month.monthKey,
+          monthLabel: month.monthLabel,
+          income: month.income,
+          expenses: month.expenses,
+          balance: month.balance,
+          savings: month.savings,
+        })),
     };
   }
 

@@ -16,4 +16,8 @@ export class UpdateTagMappingsDto {
   @IsOptional()
   @IsString()
   costs?: string; // Tag ID for deductible tax costs
+
+  @IsOptional()
+  @IsString()
+  savings?: string; // Tag ID for savings-related expenses
 }

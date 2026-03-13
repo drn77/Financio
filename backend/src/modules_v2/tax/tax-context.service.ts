@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { TaxForm, UpdateTaxConfigDto, ZusProfile, LumpSumPreset, BusinessProfile } from './dto/update-tax-config.dto';
 
-type TagMappings = { income?: string; expense?: string; planning?: string; costs?: string };
+type TagMappings = { income?: string; expense?: string; planning?: string; costs?: string; savings?: string };
 
 interface IYearTaxRules {
   scaleThreshold: number;
@@ -170,7 +170,7 @@ export class TaxContextService {
   }
 
   private async _buildTagIdToNameMap(familyId: string, tagMappings: TagMappings): Promise<Record<string, string>> {
-    const tagIds = [tagMappings.income, tagMappings.expense, tagMappings.planning, tagMappings.costs].filter(Boolean) as string[];
+    const tagIds = [tagMappings.income, tagMappings.expense, tagMappings.planning, tagMappings.costs, tagMappings.savings].filter(Boolean) as string[];
     if (tagIds.length === 0) return {};
 
     const tags = await this.prisma.tag.findMany({
