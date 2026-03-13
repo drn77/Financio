@@ -96,6 +96,58 @@ export class BillContextService {
     return 'UPCOMING';
   }
 
+  private _normalizeDate(date: Date): Date {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  }
+
+  private _computeReferenceDueDate(dueDay: number, startDate: Date, now: Date): Date {
+    const dueInCurrentMonth = new Date(now.getFullYear(), now.getMonth(), dueDay);
+    if (this._normalizeDate(dueInCurrentMonth) >= this._normalizeDate(startDate)) {
+      return dueInCurrentMonth;
+    }
+
+    const startMonthDue = new Date(startDate.getFullYear(), startDate.getMonth(), dueDay);
+    if (this._normalizeDate(startMonthDue) >= this._normalizeDate(startDate)) {
+      return startMonthDue;
+    }
+
+    return new Date(startDate.getFullYear(), startDate.getMonth() + 1, dueDay);
+  }
+
+  private _mapTag(tag: any) {
+    if (!tag) return null;
+    return {
+      id: tag.id,
+      name: tag.name,
+      color: tag.color,
+      icon: tag.icon,
+      groupName: tag.tagGroup?.name ?? null,
+    };
+  }
+
+  private _resolveTransitionTag(
+    bill: any,
+    paidAmount: number,
+    billAmount: number,
+    referenceDueDate: Date,
+  ) {
+    const beforeTag = this._mapTag(bill.tagBeforePayment);
+    const afterTag = this._mapTag(bill.tagAfterPayment);
+    if (!beforeTag && !afterTag) return null;
+
+    if (paidAmount >= billAmount) {
+      return afterTag;
+    }
+
+    const now = new Date();
+    const daysUntilDue = Math.ceil((referenceDueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    if (daysUntilDue <= Number(bill.reminderDays ?? 0)) {
+      return beforeTag;
+    }
+
+    return afterTag;
+  }
+
   private _computePaymentStats(payments: { amount: any; dueDate: Date; paidAt: Date }[]) {
     if (payments.length === 0) {
       return { averageAmount: 0, lastPaymentDate: null, totalPaid: 0, paymentCount: 0 };
@@ -118,6 +170,31 @@ export class BillContextService {
     const paidAmount = this._getPaidAmountForCurrentMonth(bill.payments);
     const isPaidThisMonth = paidAmount >= billAmount;
     const paymentStats = this._computePaymentStats(bill.payments);
+    const startDate = bill.paymentStartDate ? new Date(bill.paymentStartDate) : new Date();
+    const endDate = bill.paymentEndDate ? new Date(bill.paymentEndDate) : null;
+    const referenceDueDate = this._computeReferenceDueDate(bill.dueDay, startDate, new Date());
+    const inPaymentWindow = this._normalizeDate(new Date()) >= this._normalizeDate(startDate)
+      && (!endDate || this._normalizeDate(new Date()) <= this._normalizeDate(endDate));
+
+    const mappedTags = (bill.tags ?? []).map((bt: any) => ({
+      id: bt.tag.id,
+      name: bt.tag.name,
+      color: bt.tag.color,
+      icon: bt.tag.icon,
+      groupName: bt.tag.tagGroup?.name ?? null,
+    }));
+
+    const transitionTag = inPaymentWindow
+      ? this._resolveTransitionTag(bill, paidAmount, billAmount, referenceDueDate)
+      : null;
+
+    if (transitionTag && !mappedTags.some((tag: { id: string }) => tag.id === transitionTag.id)) {
+      mappedTags.push(transitionTag);
+    }
+
+    const status = !inPaymentWindow
+      ? 'UPCOMING'
+      : this._computeStatus(referenceDueDate.getDate(), paidAmount, billAmount);
 
     return {
       ...billWithoutCategory,
@@ -127,18 +204,14 @@ export class BillContextService {
         ...p,
         amount: Number(p.amount),
       })),
-      tags: (bill.tags ?? []).map((bt: any) => ({
-        id: bt.tag.id,
-        name: bt.tag.name,
-        color: bt.tag.color,
-        icon: bt.tag.icon,
-        groupName: bt.tag.tagGroup?.name ?? null,
-      })),
-      nextDueDate: this._computeNextDueDate(bill.dueDay, bill.frequency),
+      tags: mappedTags,
+      tagBeforePayment: this._mapTag(bill.tagBeforePayment),
+      tagAfterPayment: this._mapTag(bill.tagAfterPayment),
+      nextDueDate: this._computeNextDueDate(referenceDueDate.getDate(), bill.frequency),
       isPaidThisMonth,
       paidAmount: Math.round(paidAmount * 100) / 100,
       remainingAmount: Math.round(Math.max(billAmount - paidAmount, 0) * 100) / 100,
-      status: this._computeStatus(bill.dueDay, paidAmount, billAmount),
+      status,
       paymentStats,
     };
   }
@@ -152,12 +225,16 @@ export class BillContextService {
       amount: input.amount,
       currency: input.currency,
       dueDay: input.dueDay,
+      paymentStartDate: new Date(input.paymentStartDate),
+      paymentEndDate: input.paymentEndDate ? new Date(input.paymentEndDate) : null,
       frequency: input.frequency,
       notes: input.notes,
       paymentType: input.paymentType,
       autoCreateExpense: input.autoCreateExpense,
       reminderDays: input.reminderDays,
       budgetLimit: input.budgetLimit,
+      tagBeforePaymentId: input.tagBeforePaymentId,
+      tagAfterPaymentId: input.tagAfterPaymentId,
       tagIds: input.tagIds,
     });
 
@@ -260,6 +337,10 @@ export class BillContextService {
       amount: input.amount,
       currency: input.currency,
       dueDay: input.dueDay,
+      paymentStartDate: input.paymentStartDate ? new Date(input.paymentStartDate) : undefined,
+      paymentEndDate: input.paymentEndDate !== undefined
+        ? (input.paymentEndDate ? new Date(input.paymentEndDate) : null)
+        : undefined,
       frequency: input.frequency,
       notes: input.notes,
       isActive: input.isActive,
@@ -267,6 +348,8 @@ export class BillContextService {
       autoCreateExpense: input.autoCreateExpense,
       reminderDays: input.reminderDays,
       budgetLimit: input.budgetLimit,
+      tagBeforePaymentId: input.tagBeforePaymentId !== undefined ? input.tagBeforePaymentId || null : undefined,
+      tagAfterPaymentId: input.tagAfterPaymentId !== undefined ? input.tagAfterPaymentId || null : undefined,
     });
 
     return this._mapBill(bill);

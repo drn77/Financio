@@ -54,6 +54,11 @@ export function BillFormDialog({
   editingBill,
   isSubmitting,
 }: Props) {
+  const hasInvalidDateRange =
+    !!form.paymentStartDate
+    && !!form.paymentEndDate
+    && new Date(form.paymentEndDate) < new Date(form.paymentStartDate);
+
   const _updateField = useCallback(
     <K extends keyof IBillFormData>(field: K, value: IBillFormData[K]) => {
       onFormChange({ ...form, [field]: value });
@@ -74,16 +79,16 @@ export function BillFormDialog({
   );
 
   const _handleSubmit = useCallback(() => {
-    if (!form.name || !form.amount || !form.dueDay) return;
+    if (!form.name || !form.amount || !form.dueDay || !form.paymentStartDate || hasInvalidDateRange) return;
     onSubmit();
-  }, [form, onSubmit]);
+  }, [form, hasInvalidDateRange, onSubmit]);
 
   const _handleClose = useCallback(() => {
     onOpenChange(false);
     onFormChange(EMPTY_FORM);
   }, [onOpenChange, onFormChange]);
 
-  const title = editingBill ? 'Edytuj rachunek' : 'Nowy rachunek';
+  const title = editingBill ? 'Edytuj cykliczny wydatek' : 'Nowy cykliczny wydatek';
 
   const groupedTags = tags.reduce<Record<string, ITagOption[]>>((acc, tag) => {
     const group = tag.groupName || 'Inne';
@@ -138,6 +143,32 @@ export function BillFormDialog({
                 value={form.dueDay}
                 onChange={(e) => _updateField('dueDay', e.target.value)}
                 placeholder="15"
+              />
+            </div>
+          </div>
+          {hasInvalidDateRange && (
+            <p className="text-xs text-destructive">Koniec płatności nie może być wcześniejszy niż początek płatności.</p>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor="bill-start-date">Początek płatności</Label>
+              <Input
+                id="bill-start-date"
+                type="date"
+                value={form.paymentStartDate}
+                onChange={(e) => _updateField('paymentStartDate', e.target.value)}
+                required
+              />
+            </div>
+            <div>
+              <Label htmlFor="bill-end-date">Koniec płatności</Label>
+              <Input
+                id="bill-end-date"
+                type="date"
+                value={form.paymentEndDate}
+                onChange={(e) => _updateField('paymentEndDate', e.target.value)}
+                placeholder="Opcjonalnie"
               />
             </div>
           </div>
@@ -242,6 +273,49 @@ export function BillFormDialog({
             </div>
           </div>
 
+          {tags.length > 0 && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Tag przed opłaceniem</Label>
+                <Select
+                  value={form.tagBeforePaymentId || '__none'}
+                  onValueChange={(value) => _updateField('tagBeforePaymentId', value === '__none' ? '' : value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Brak" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none">Brak</SelectItem>
+                    {tags.map((tag) => (
+                      <SelectItem key={tag.id} value={tag.id}>
+                        {tag.groupName}: {tag.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Tag po opłaceniu</Label>
+                <Select
+                  value={form.tagAfterPaymentId || '__none'}
+                  onValueChange={(value) => _updateField('tagAfterPaymentId', value === '__none' ? '' : value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Brak" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none">Brak</SelectItem>
+                    {tags.map((tag) => (
+                      <SelectItem key={tag.id} value={tag.id}>
+                        {tag.groupName}: {tag.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+
           <div className="flex items-center gap-2">
             <Checkbox
               id="bill-auto-expense"
@@ -271,8 +345,19 @@ export function BillFormDialog({
           <Button variant="outline" onClick={_handleClose}>
             Anuluj
           </Button>
-          <Button onClick={_handleSubmit} disabled={isSubmitting || !form.name || !form.amount || Number(form.amount) < 0.01 || !form.dueDay}>
-            {isSubmitting ? 'Zapisywanie...' : editingBill ? 'Zapisz zmiany' : 'Dodaj rachunek'}
+          <Button
+            onClick={_handleSubmit}
+            disabled={
+              isSubmitting
+              || !form.name
+              || !form.amount
+              || Number(form.amount) < 0.01
+              || !form.dueDay
+              || !form.paymentStartDate
+              || hasInvalidDateRange
+            }
+          >
+            {isSubmitting ? 'Zapisywanie...' : editingBill ? 'Zapisz zmiany' : 'Dodaj cykliczny wydatek'}
           </Button>
         </DialogFooter>
       </DialogContent>

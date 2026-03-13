@@ -117,15 +117,19 @@ export class DashboardContextService {
   }
 
   // #region Private
-  private _computeNextDueDate(dueDay: number): Date {
+  private _computeNextDueDate(dueDay: number, startDate?: Date | null, endDate?: Date | null): Date {
     const now = new Date();
-    const currentMonth = new Date(now.getFullYear(), now.getMonth(), dueDay);
+    const reference = startDate && startDate > now ? startDate : now;
+    const currentMonth = new Date(reference.getFullYear(), reference.getMonth(), dueDay);
 
-    if (currentMonth >= now) {
+    if (currentMonth >= reference) {
+      if (endDate && currentMonth > endDate) return endDate;
       return currentMonth;
     }
 
-    return new Date(now.getFullYear(), now.getMonth() + 1, dueDay);
+    const nextMonth = new Date(reference.getFullYear(), reference.getMonth() + 1, dueDay);
+    if (endDate && nextMonth > endDate) return endDate;
+    return nextMonth;
   }
 
   private _getPaidAmountForCurrentMonth(payments: { amount: any; dueDate: Date; paidAt: Date }[]): number {
@@ -278,7 +282,12 @@ export class DashboardContextService {
         },
       }),
       this.prisma.bill.findMany({
-        where: { familyId, isActive: true },
+        where: {
+          familyId,
+          isActive: true,
+          paymentStartDate: { lte: monthEnd },
+          OR: [{ paymentEndDate: null }, { paymentEndDate: { gte: monthStart } }],
+        },
         include: { payments: { orderBy: { paidAt: 'desc' } } },
         orderBy: { dueDay: 'asc' },
       }),
@@ -342,7 +351,11 @@ export class DashboardContextService {
         name: bill.name,
         amount: billAmount,
         dueDay: bill.dueDay,
-        nextDueDate: this._computeNextDueDate(bill.dueDay),
+        nextDueDate: this._computeNextDueDate(
+          bill.dueDay,
+          (bill as any).paymentStartDate ? new Date((bill as any).paymentStartDate) : null,
+          (bill as any).paymentEndDate ? new Date((bill as any).paymentEndDate) : null,
+        ),
         isPaidThisMonth: paidAmount >= billAmount,
         paidAmount: Math.round(paidAmount * 100) / 100,
         remainingAmount: Math.round(Math.max(billAmount - paidAmount, 0) * 100) / 100,
@@ -387,7 +400,12 @@ export class DashboardContextService {
         },
       }),
       this.prisma.bill.findMany({
-        where: { familyId, isActive: true },
+        where: {
+          familyId,
+          isActive: true,
+          paymentStartDate: { lte: monthEnd },
+          OR: [{ paymentEndDate: null }, { paymentEndDate: { gte: monthStart } }],
+        },
         include: { payments: { orderBy: { paidAt: 'desc' } } },
       }),
       this.prisma.fixedExpense.findMany({
@@ -446,7 +464,11 @@ export class DashboardContextService {
           name: bill.name,
           amount: Math.round(remaining * 100) / 100,
           currency: (bill as any).currency ?? 'PLN',
-          dueDate: this._computeNextDueDate(bill.dueDay),
+          dueDate: this._computeNextDueDate(
+            bill.dueDay,
+            (bill as any).paymentStartDate ? new Date((bill as any).paymentStartDate) : null,
+            (bill as any).paymentEndDate ? new Date((bill as any).paymentEndDate) : null,
+          ),
         });
       }
     }

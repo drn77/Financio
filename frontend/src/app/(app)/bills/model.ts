@@ -4,12 +4,16 @@ export interface IBillFormData {
   name: string;
   amount: string;
   dueDay: string;
+  paymentStartDate: string;
+  paymentEndDate: string;
   frequency: Frequency;
   notes: string;
   paymentType: PaymentType;
   autoCreateExpense: boolean;
   reminderDays: string;
   budgetLimit: string;
+  tagBeforePaymentId: string;
+  tagAfterPaymentId: string;
   tagIds: string[];
 }
 
@@ -30,12 +34,16 @@ export const EMPTY_FORM: IBillFormData = {
   name: '',
   amount: '',
   dueDay: '',
+  paymentStartDate: '',
+  paymentEndDate: '',
   frequency: 'MONTHLY',
   notes: '',
   paymentType: 'MANUAL',
   autoCreateExpense: false,
   reminderDays: '3',
   budgetLimit: '',
+  tagBeforePaymentId: '',
+  tagAfterPaymentId: '',
   tagIds: [],
 };
 

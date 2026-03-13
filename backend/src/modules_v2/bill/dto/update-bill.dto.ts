@@ -9,6 +9,7 @@ import {
   IsBoolean,
   IsArray,
   IsUUID,
+  IsDateString,
 } from 'class-validator';
 
 enum Frequency {
@@ -45,6 +46,14 @@ export class UpdateBillDto {
   dueDay?: number;
 
   @IsOptional()
+  @IsDateString()
+  paymentStartDate?: string;
+
+  @IsOptional()
+  @IsDateString()
+  paymentEndDate?: string;
+
+  @IsOptional()
   @IsEnum(Frequency)
   frequency?: string;
 
@@ -73,6 +82,14 @@ export class UpdateBillDto {
   @IsOptional()
   @IsNumber()
   budgetLimit?: number;
+
+  @IsOptional()
+  @IsUUID('4')
+  tagBeforePaymentId?: string;
+
+  @IsOptional()
+  @IsUUID('4')
+  tagAfterPaymentId?: string;
 
   @IsOptional()
   @IsArray()

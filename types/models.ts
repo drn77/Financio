@@ -107,6 +107,8 @@ export interface IBill {
   amount: number;
   currency: string;
   dueDay: number;
+  paymentStartDate: string;
+  paymentEndDate: string | null;
   frequency: Frequency;
   notes: string | null;
   isActive: boolean;
@@ -114,6 +116,10 @@ export interface IBill {
   autoCreateExpense: boolean;
   reminderDays: number;
   budgetLimit: number | null;
+  tagBeforePaymentId: string | null;
+  tagAfterPaymentId: string | null;
+  tagBeforePayment: IBillTag | null;
+  tagAfterPayment: IBillTag | null;
   tags: IBillTag[];
   payments: IBillPayment[];
   nextDueDate?: string;

@@ -140,6 +140,8 @@ model Tag {
 
   tagGroup TagGroup @relation(fields: [tagGroupId], references: [id], onDelete: Cascade)
   billTags BillTag[]
+  beforePaymentBills Bill[] @relation("BillTagBeforePayment")
+  afterPaymentBills Bill[]  @relation("BillTagAfterPayment")
   receiptTags ReceiptTag[]
 
   @@unique([tagGroupId, name])
@@ -210,6 +212,8 @@ model Bill {
   amount            Decimal     @db.Decimal(12, 2)
   currency          String      @default("PLN")
   dueDay            Int         // day of month (1-31)
+  paymentStartDate  DateTime
+  paymentEndDate    DateTime?
   frequency         Frequency   @default(MONTHLY)
   categoryId        String?
   notes             String?
@@ -218,12 +222,16 @@ model Bill {
   autoCreateExpense Boolean     @default(false)
   reminderDays      Int         @default(3) // days before due to remind
   budgetLimit       Decimal?    @db.Decimal(12, 2) // alert threshold
+  tagBeforePaymentId String?
+  tagAfterPaymentId  String?
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt
 
   family   Family        @relation(fields: [familyId], references: [id], onDelete: Cascade)
   payments BillPayment[]
   tags     BillTag[]
+  tagBeforePayment Tag? @relation("BillTagBeforePayment", fields: [tagBeforePaymentId], references: [id], onDelete: SetNull)
+  tagAfterPayment  Tag? @relation("BillTagAfterPayment", fields: [tagAfterPaymentId], references: [id], onDelete: SetNull)
 
   @@map("bills")
 }

@@ -14,18 +14,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { Plus, LayoutGrid, List, ArrowUpDown } from 'lucide-react';
+import { Plus, LayoutGrid, List } from 'lucide-react';
 import type { IBill, IBillPayment } from '@shared/models';
 import {
   EMPTY_FORM,
-  SORT_LABELS,
   type IBillFormData,
   type IFilterState,
   type ITagOption,
@@ -176,7 +168,10 @@ export default function BillsPage() {
 
   const _handleOpenCreate = useCallback(() => {
     setEditingBill(null);
-    setForm(EMPTY_FORM);
+    setForm({
+      ...EMPTY_FORM,
+      paymentStartDate: new Date().toISOString().split('T')[0],
+    });
     setShowForm(true);
   }, []);
 
@@ -186,12 +181,16 @@ export default function BillsPage() {
       name: bill.name,
       amount: String(bill.amount),
       dueDay: String(bill.dueDay),
+      paymentStartDate: bill.paymentStartDate ? new Date(bill.paymentStartDate).toISOString().split('T')[0] : '',
+      paymentEndDate: bill.paymentEndDate ? new Date(bill.paymentEndDate).toISOString().split('T')[0] : '',
       frequency: bill.frequency,
       notes: bill.notes ?? '',
       paymentType: bill.paymentType,
       autoCreateExpense: bill.autoCreateExpense,
       reminderDays: String(bill.reminderDays),
       budgetLimit: bill.budgetLimit != null ? String(bill.budgetLimit) : '',
+      tagBeforePaymentId: bill.tagBeforePaymentId ?? '',
+      tagAfterPaymentId: bill.tagAfterPaymentId ?? '',
       tagIds: bill.tags.map((t) => t.id),
     });
     setShowForm(true);
@@ -205,12 +204,16 @@ export default function BillsPage() {
         name: form.name,
         amount: Number(form.amount),
         dueDay: Number(form.dueDay),
+        paymentStartDate: form.paymentStartDate,
+        paymentEndDate: form.paymentEndDate || undefined,
         frequency: form.frequency,
         notes: form.notes || undefined,
         paymentType: form.paymentType,
         autoCreateExpense: form.autoCreateExpense,
         reminderDays: Number(form.reminderDays),
         budgetLimit: form.budgetLimit ? Number(form.budgetLimit) : undefined,
+        tagBeforePaymentId: form.tagBeforePaymentId || undefined,
+        tagAfterPaymentId: form.tagAfterPaymentId || undefined,
         tagIds: form.tagIds.length > 0 ? form.tagIds : undefined,
       };
 
@@ -400,35 +403,11 @@ export default function BillsPage() {
             filters={filters}
             onFiltersChange={setFilters}
             tags={tags}
+            sortField={sortField}
+            sortDirection={sortDirection}
+            onSortFieldChange={setSortField}
+            onSortDirectionToggle={() => setSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'))}
           />
-
-          <div className="flex items-center gap-2">
-            <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
-            <Select
-              value={sortField || '__none'}
-              onValueChange={(v) => setSortField(v === '__none' ? '' as SortField | '' : v as SortField)}
-            >
-              <SelectTrigger className="h-8 w-35">
-                <SelectValue placeholder="Sortuj" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none">Bez sortowania</SelectItem>
-                {(Object.entries(SORT_LABELS) as [SortField, string][]).map(([key, label]) => (
-                  <SelectItem key={key} value={key}>{label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {sortField && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 px-2"
-                onClick={() => setSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'))}
-              >
-                {sortDirection === 'asc' ? '↑' : '↓'}
-              </Button>
-            )}
-          </div>
         </div>
 
         <TabsContent value={activeTab} className="mt-4">
