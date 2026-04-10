@@ -48,6 +48,28 @@ export class RecordActionsService {
     });
   }
 
+  async findBillAutoExpenseRecordByOccurrence(
+    templateId: string,
+    billId: string,
+    occurrenceDateIso: string,
+  ): Promise<TemplateRecord | null> {
+    return this.prisma.templateRecord.findFirst({
+      where: {
+        templateId,
+        AND: [
+          { data: { path: ['_billId'], equals: billId } as any },
+          {
+            OR: [
+              { data: { path: ['_billOccurrenceDate'], equals: occurrenceDateIso } as any },
+              { data: { path: ['col_date'], equals: occurrenceDateIso } as any },
+            ],
+          },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   async findAutoExpenseRecordCandidates(
     familyId: string,
     billId: string,

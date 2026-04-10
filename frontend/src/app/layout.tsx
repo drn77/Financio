@@ -35,6 +35,8 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const isProduction = process.env.NODE_ENV === "production";
+
   return (
     <html lang="pl" suppressHydrationWarning>
       <body className={`${inter.variable} font-sans antialiased`}>
@@ -47,20 +49,36 @@ export default function RootLayout({
             </TooltipProvider>
           </AuthProvider>
         </ThemeProvider>
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              if ('serviceWorker' in navigator) {
-                window.addEventListener('load', () => {
-                  navigator.serviceWorker.register('/sw.js').then(function(reg) {
-                    // Check for SW updates periodically
-                    setInterval(function() { reg.update(); }, 60 * 60 * 1000);
+        {isProduction ? (
+          <script
+            dangerouslySetInnerHTML={{
+              __html: `
+                if ('serviceWorker' in navigator) {
+                  window.addEventListener('load', () => {
+                    navigator.serviceWorker.register('/sw.js').then(function(reg) {
+                      setInterval(function() { reg.update(); }, 60 * 60 * 1000);
+                    }).catch(() => {});
+                  });
+                }
+              `,
+            }}
+          />
+        ) : (
+          <script
+            dangerouslySetInnerHTML={{
+              __html: `
+                if ('serviceWorker' in navigator) {
+                  navigator.serviceWorker.getRegistrations().then((registrations) => {
+                    registrations.forEach((registration) => registration.unregister());
                   }).catch(() => {});
-                });
-              }
-            `,
-          }}
-        />
+                }
+                if ('caches' in window) {
+                  caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))).catch(() => {});
+                }
+              `,
+            }}
+          />
+        )}
       </body>
     </html>
   );

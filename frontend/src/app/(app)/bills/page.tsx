@@ -31,9 +31,26 @@ import { BillSummary } from './BillSummary';
 import { PayBillDialog } from './PayBillDialog';
 import { PaymentHistoryDialog } from './PaymentHistoryDialog';
 
+type ISelectableExpenseField = {
+  id: string;
+  name: string;
+  type: string;
+  tagGroupId?: string | null;
+};
+
+type IExpenseTagGroup = {
+  tagGroupId: string;
+  columnName: string;
+  mode: 'available' | 'select' | 'auto_tags';
+  autoTagIds: string[];
+};
+
 export default function BillsPage() {
   const [bills, setBills] = useState<IBill[]>([]);
   const [tags, setTags] = useState<ITagOption[]>([]);
+  const [savingsGoals, setSavingsGoals] = useState<{ id: string; name: string }[]>([]);
+  const [savingsTagId, setSavingsTagId] = useState<string | null>(null);
+  const [expenseTagGroups, setExpenseTagGroups] = useState<IExpenseTagGroup[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [showForm, setShowForm] = useState(false);
@@ -64,11 +81,23 @@ export default function BillsPage() {
 
   const [deleteTarget, setDeleteTarget] = useState<IBill | null>(null);
 
+  const _refreshLinkedExpenses = useCallback(async () => {
+    try {
+      await api.syncBillAutoExpenses();
+    } catch (error) {
+      console.error('Failed to sync linked expenses after bill change', error);
+    }
+    window.dispatchEvent(new Event('financio:summary-refresh'));
+  }, []);
+
   const _loadData = useCallback(async () => {
     try {
-      const [billsData, tagGroupsData] = await Promise.all([
+      const [billsData, tagGroupsData, goalsData, tagMappings, expenseMappingsData] = await Promise.all([
         api.getBills(),
         api.getTagGroups(),
+        api.getSavingsGoals(),
+        api.getTagMappings(),
+        api.getExpenseMappings(),
       ]);
 
       setBills(Array.isArray(billsData) ? billsData : []);
@@ -84,6 +113,7 @@ export default function BillsPage() {
                 name: tag.name,
                 color: tag.color || '#2ECC71',
                 groupName: group.name,
+                tagGroupId: group.id,
               });
             }
           }
@@ -91,6 +121,49 @@ export default function BillsPage() {
       }
 
       setTags(flatTags);
+      setSavingsGoals(
+        Array.isArray(goalsData)
+          ? goalsData.map((goal: { id: string; name: string }) => ({ id: goal.id, name: goal.name }))
+          : [],
+      );
+      setSavingsTagId(tagMappings?.savings ?? null);
+
+      // Extract expense tag groups for recurring-expense status transitions and default auto tags.
+      const billFieldConfigs = expenseMappingsData?.mappings?.bills?.fieldConfigs ?? {};
+      const availableFields = (expenseMappingsData?.availableFields ?? []) as ISelectableExpenseField[];
+      const expenseGroups = new Map<string, IExpenseTagGroup>();
+      for (const field of availableFields) {
+        if (field.type === 'tag_group' && field.tagGroupId) {
+          const config = billFieldConfigs[field.id];
+          const current = expenseGroups.get(field.tagGroupId);
+          const mode = config?.mode === 'select' || config?.mode === 'auto_tags'
+            ? config.mode
+            : 'available';
+          const autoTagIds = config?.mode === 'auto_tags' ? (config.autoTagIds ?? []) : [];
+
+          if (!current) {
+            expenseGroups.set(field.tagGroupId, {
+              tagGroupId: field.tagGroupId,
+              columnName: field.name,
+              mode,
+              autoTagIds,
+            });
+            continue;
+          }
+
+          if (mode === 'auto_tags') {
+            current.mode = 'auto_tags';
+            current.autoTagIds = Array.from(new Set([...current.autoTagIds, ...autoTagIds]));
+          } else if (mode === 'select' && current.mode === 'available') {
+            current.mode = 'select';
+          }
+
+          if (!current.columnName && field.name) {
+            current.columnName = field.name;
+          }
+        }
+      }
+      setExpenseTagGroups(Array.from(expenseGroups.values()));
     } catch {
       setBills([]);
     } finally {
@@ -168,12 +241,16 @@ export default function BillsPage() {
 
   const _handleOpenCreate = useCallback(() => {
     setEditingBill(null);
+    const autoTagIds = expenseTagGroups
+      .filter((g) => g.mode === 'auto_tags')
+      .flatMap((g) => g.autoTagIds);
     setForm({
       ...EMPTY_FORM,
       paymentStartDate: new Date().toISOString().split('T')[0],
+      tagIds: Array.from(new Set(autoTagIds)),
     });
     setShowForm(true);
-  }, []);
+  }, [expenseTagGroups]);
 
   const _handleOpenEdit = useCallback((bill: IBill) => {
     setEditingBill(bill);
@@ -189,9 +266,10 @@ export default function BillsPage() {
       autoCreateExpense: bill.autoCreateExpense,
       reminderDays: String(bill.reminderDays),
       budgetLimit: bill.budgetLimit != null ? String(bill.budgetLimit) : '',
+      savingsGoalId: bill.savingsGoalId ?? '',
+      tagIds: bill.tags.map((t) => t.id),
       tagBeforePaymentId: bill.tagBeforePaymentId ?? '',
       tagAfterPaymentId: bill.tagAfterPaymentId ?? '',
-      tagIds: bill.tags.map((t) => t.id),
     });
     setShowForm(true);
   }, []);
@@ -212,9 +290,10 @@ export default function BillsPage() {
         autoCreateExpense: form.autoCreateExpense,
         reminderDays: Number(form.reminderDays),
         budgetLimit: form.budgetLimit ? Number(form.budgetLimit) : undefined,
+        savingsGoalId: form.savingsGoalId || undefined,
+        tagIds: form.tagIds.length > 0 ? form.tagIds : undefined,
         tagBeforePaymentId: form.tagBeforePaymentId || undefined,
         tagAfterPaymentId: form.tagAfterPaymentId || undefined,
-        tagIds: form.tagIds.length > 0 ? form.tagIds : undefined,
       };
 
       if (editingBill) {
@@ -222,6 +301,8 @@ export default function BillsPage() {
       } else {
         await api.createBill(payload);
       }
+
+      await _refreshLinkedExpenses();
 
       setShowForm(false);
       setForm(EMPTY_FORM);
@@ -232,7 +313,7 @@ export default function BillsPage() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [form, editingBill, _loadData]);
+  }, [form, editingBill, _loadData, _refreshLinkedExpenses]);
 
   const _handleRequestDelete = useCallback((bill: IBill) => {
     setDeleteTarget(bill);
@@ -255,18 +336,20 @@ export default function BillsPage() {
     async (bill: IBill) => {
       try {
         await api.updateBill(bill.id, { isActive: !bill.isActive });
+        await _refreshLinkedExpenses();
         await _loadData();
       } catch (e) {
         console.error(e);
       }
     },
-    [_loadData],
+    [_loadData, _refreshLinkedExpenses],
   );
 
   const _handleDeletePayment = useCallback(
     async (billId: string, paymentId: string) => {
       try {
         await api.deleteBillPayment(billId, paymentId);
+        await _refreshLinkedExpenses();
         await _loadData();
 
         // Refresh history if still viewing
@@ -284,7 +367,7 @@ export default function BillsPage() {
         console.error(e);
       }
     },
-    [_loadData, showHistory, historyBill],
+    [_loadData, showHistory, historyBill, _refreshLinkedExpenses],
   );
 
   const _handleOpenPay = useCallback((bill: IBill) => {
@@ -298,6 +381,7 @@ export default function BillsPage() {
 
       try {
         await api.payBill(billId, { amount, dueDate, notes });
+        await _refreshLinkedExpenses();
         setShowPayDialog(false);
         setPayBill(null);
         await _loadData();
@@ -323,7 +407,7 @@ export default function BillsPage() {
         setIsPaying(false);
       }
     },
-    [_loadData, showHistory, historyBill],
+    [_loadData, showHistory, historyBill, _refreshLinkedExpenses],
   );
 
   const _handleViewHistory = useCallback(async (bill: IBill) => {
@@ -456,6 +540,9 @@ export default function BillsPage() {
         tags={tags}
         editingBill={editingBill}
         isSubmitting={isSubmitting}
+        savingsGoals={savingsGoals}
+        savingsTagId={savingsTagId}
+        expenseTagGroups={expenseTagGroups}
       />
 
       <PayBillDialog

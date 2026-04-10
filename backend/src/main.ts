@@ -31,7 +31,7 @@ async function bootstrap() {
   app.use(
     session({
       store: new PgStore({
-        pool: sessionPool,
+        pool: sessionPool as any,
         tableName: 'user_sessions',
         createTableIfMissing: true,
       }),

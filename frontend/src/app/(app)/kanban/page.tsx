@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { Tag } from '@/components/Tag';
 import { Plus, GripVertical, Save, Pencil, Settings } from 'lucide-react';
 import { toastError } from '@/lib/toast';
 import { useRouter } from 'next/navigation';
@@ -356,7 +357,9 @@ export default function KanbanPage() {
                           <SelectTrigger><SelectValue placeholder="Wybierz tag" /></SelectTrigger>
                           <SelectContent>
                             {allTags.map((tag: any) => (
-                              <SelectItem key={tag.id} value={tag.id}>{tag.name} ({tag.groupName})</SelectItem>
+                              <SelectItem key={tag.id} value={tag.id}>
+                                <Tag name={tag.name} color={tag.color} icon={tag.icon} imageUrl={tag.imageUrl} groupName={tag.groupName} />
+                              </SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
@@ -421,7 +424,9 @@ export default function KanbanPage() {
                                   <SelectTrigger><SelectValue /></SelectTrigger>
                                   <SelectContent>
                                     {allTags.map((t: any) => (
-                                      <SelectItem key={t.id} value={t.id}>{t.name} ({t.groupName})</SelectItem>
+                                      <SelectItem key={t.id} value={t.id}>
+                                        <Tag name={t.name} color={t.color} icon={t.icon} imageUrl={t.imageUrl} groupName={t.groupName} />
+                                      </SelectItem>
                                     ))}
                                   </SelectContent>
                                 </Select>

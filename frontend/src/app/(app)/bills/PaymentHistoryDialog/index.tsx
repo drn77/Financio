@@ -80,7 +80,7 @@ export function PaymentHistoryDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>Historia płatności — {bill.name}</DialogTitle>
         </DialogHeader>

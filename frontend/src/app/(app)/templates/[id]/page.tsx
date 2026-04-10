@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { Tag } from '@/components/Tag';
 import {
   Popover,
   PopoverContent,
@@ -103,18 +104,13 @@ function CellEditor({ col, value, onChange, categories, members, tagGroups }: {
                 tags.map((tag) => {
                   const tagData = availableTags.find((t: any) => t.name === tag);
                   return (
-                    <Badge
+                    <Tag
                       key={tag}
-                      variant="secondary"
-                      className="text-xs gap-1 pointer-events-none"
-                      style={{
-                        backgroundColor: tagData?.color ? `${tagData.color}30` : undefined,
-                        color: tagData?.color || undefined,
-                        borderColor: tagData?.color || undefined,
-                      }}
-                    >
-                      {tagData?.icon ? `${tagData.icon} ` : ''}{tag}
-                    </Badge>
+                      name={tag}
+                      color={tagData?.color}
+                      icon={tagData?.icon}
+                      className="pointer-events-none"
+                    />
                   );
                 })
               )}
@@ -134,11 +130,7 @@ function CellEditor({ col, value, onChange, categories, members, tagGroups }: {
                       className={`flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded-sm hover:bg-accent cursor-pointer text-left ${isSelected ? 'bg-accent/60 font-medium' : ''}`}
                       onClick={() => toggleTag(t.name)}
                     >
-                      <span
-                        className="inline-block h-2.5 w-2.5 rounded-full shrink-0"
-                        style={{ backgroundColor: t.color || '#888' }}
-                      />
-                      <span className="flex-1 truncate">{t.icon ? `${t.icon} ` : ''}{t.name}</span>
+                      <Tag name={t.name} color={t.color} icon={t.icon} className="pointer-events-none" />
                       {isSelected && <span className="text-primary">✓</span>}
                     </button>
                   );

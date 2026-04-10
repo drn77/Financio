@@ -24,4 +24,7 @@ export class UpdateTemplateDto {
   @IsOptional()
   @IsBoolean()
   isDefault?: boolean;
+
+  @IsOptional()
+  billingPeriod?: Record<string, any>;
 }

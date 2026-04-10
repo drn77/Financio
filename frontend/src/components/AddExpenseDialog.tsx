@@ -11,11 +11,10 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
+import { Tag } from '@/components/Tag';
 import { Camera, Plus, ArrowLeft, ShoppingCart, Loader2, CheckCircle2, ImagePlus } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { cn } from '@/lib/utils';
 import { toastError, toastSuccess } from '@/lib/toast';
 import { compressImage, fileToDataUrl, runReceiptOcr } from '@/lib/receipt-ocr';
 
@@ -366,13 +365,9 @@ export function AddExpenseDialog({ onExpenseAdded }: AddExpenseDialogProps) {
                         setDescription(tag.name);
                         setStep('form');
                       }}
-                      className={cn(
-                        'rounded-full border px-3 py-1.5 text-sm transition-colors',
-                        'hover:bg-accent/60',
-                      )}
-                      style={{ borderColor: tag.color, color: tag.color }}
+                      className="cursor-pointer"
                     >
-                      {tag.name}
+                      <Tag name={tag.name} color={tag.color} />
                     </button>
                   ))}
                 </div>
@@ -392,9 +387,7 @@ export function AddExpenseDialog({ onExpenseAdded }: AddExpenseDialogProps) {
             <div>
               <Label>Wybrany tag</Label>
               <div className="mt-1">
-                <Badge variant="outline" style={{ borderColor: selectedTag.color, color: selectedTag.color }}>
-                  {selectedTag.name}
-                </Badge>
+                <Tag name={selectedTag.name} color={selectedTag.color} />
               </div>
             </div>
 

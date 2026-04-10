@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -24,6 +24,7 @@ import {
   LineChart, Line,
 } from 'recharts';
 import { Eye, EyeOff } from 'lucide-react';
+import { PeriodHistory } from '../expenses/PeriodHistory';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -42,6 +43,7 @@ function paginate<T>(items: T[], page: number, pageSize: number) {
 export default function StatisticsPage() {
   const [stats, setStats] = useState<any>(null);
   const [dashboardConfig, setDashboardConfig] = useState<any>(null);
+  const [periodTemplateId, setPeriodTemplateId] = useState<string | null>(null);
   const [taxByMonth, setTaxByMonth] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [loadingConfig, setLoadingConfig] = useState(false);
@@ -60,13 +62,15 @@ export default function StatisticsPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [statisticsData, config] = await Promise.all([
+      const [statisticsData, config, defaultTemplate] = await Promise.all([
         api.getDashboardStatistics(),
         api.getDashboardConfig(),
+        api.getDefaultTemplate().catch(() => null),
       ]);
 
       setStats(statisticsData);
       setDashboardConfig(config);
+      setPeriodTemplateId(defaultTemplate?.billingPeriod?.type ? defaultTemplate.id : null);
 
       const months: Array<{ year: number; month: number; monthKey: string }> = statisticsData?.months ?? [];
       if (months.length > 0) {
@@ -90,6 +94,7 @@ export default function StatisticsPage() {
     } catch {
       setStats(null);
       setDashboardConfig(null);
+      setPeriodTemplateId(null);
       setTaxByMonth({});
     }
     finally { setLoading(false); }
@@ -159,22 +164,18 @@ export default function StatisticsPage() {
     }>,
   };
 
-  const taxSeries = useMemo(() => {
-    const source = (stats.series ?? []) as any[];
-    return source.map((point) => {
-      const tax = Number(taxByMonth[point.monthKey] ?? 0);
-      return {
-        ...point,
-        taxes: tax,
-      };
-    });
-  }, [stats.series, taxByMonth]);
+  const taxSeries = ((stats?.series ?? []) as any[]).map((point) => {
+    const tax = Number(taxByMonth[point.monthKey] ?? 0);
+    return {
+      ...point,
+      taxes: tax,
+    };
+  });
 
-  const averageTaxes = useMemo(() => {
-    const values = Object.values(taxByMonth);
-    if (values.length === 0) return 0;
-    return values.reduce((sum, value) => sum + Number(value), 0) / values.length;
-  }, [taxByMonth]);
+  const taxValues = Object.values(taxByMonth);
+  const averageTaxes = taxValues.length === 0
+    ? 0
+    : taxValues.reduce((sum, value) => sum + Number(value), 0) / taxValues.length;
 
   const averageIncomeAfterTaxes = averageIncome - averageTaxes;
 
@@ -199,7 +200,7 @@ export default function StatisticsPage() {
           onValueChange={onCategoryFieldChange}
           disabled={loadingConfig}
         >
-          <SelectTrigger className="w-[280px]"><SelectValue placeholder="Pole kategorii" /></SelectTrigger>
+          <SelectTrigger className="w-70"><SelectValue placeholder="Pole kategorii" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="__none">Automatyczne (col_category)</SelectItem>
             {(dashboardConfig?.availableCategoryFields ?? []).map((field: any) => (
@@ -378,6 +379,8 @@ export default function StatisticsPage() {
         </CardContent>
       </Card>
 
+      {periodTemplateId && <PeriodHistory templateId={periodTemplateId} />}
+
       <div className="grid gap-3 xl:grid-cols-2">
         <Card>
           <CardHeader><CardTitle className="text-base">Top 5 wzrostów kategorii m/m</CardTitle></CardHeader>
@@ -424,7 +427,7 @@ export default function StatisticsPage() {
       </div>
 
       <Dialog open={showIncomeHistory} onOpenChange={setShowIncomeHistory}>
-        <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-lg">
+        <DialogContent className="max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Historia przychodów</DialogTitle>
             <DialogDescription>Wszystkie miesiące z paginacją</DialogDescription>
@@ -446,7 +449,7 @@ export default function StatisticsPage() {
       </Dialog>
 
       <Dialog open={showExpenseHistory} onOpenChange={setShowExpenseHistory}>
-        <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-lg">
+        <DialogContent className="max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Historia wydatków</DialogTitle>
             <DialogDescription>Lista miesięcy z sumą wydatków</DialogDescription>

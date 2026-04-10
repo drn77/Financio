@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Search, X, Filter, ArrowUpDown } from 'lucide-react';
+import { Tag } from '@/components/Tag';
 import {
   STATUS_LABELS,
   SORT_LABELS,
@@ -91,7 +92,7 @@ export function BillFilters({
             <SelectItem value="__all">Wszystkie tagi</SelectItem>
             {tags.map((tag) => (
               <SelectItem key={tag.id} value={tag.id}>
-                {tag.groupName}: {tag.name}
+                <Tag name={tag.name} color={tag.color} icon={tag.icon} groupName={tag.groupName} />
               </SelectItem>
             ))}
           </SelectContent>

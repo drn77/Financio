@@ -1,6 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { UpdateDashboardConfigDto } from './dto/update-dashboard-config.dto';
+import {
+  calculatePeriodBoundaries,
+  type IBillingPeriodConfig,
+} from '../../shared/billing-period/billing-period.utils';
 
 export interface IDashboardExpenseByCategory {
   category: string;
@@ -134,6 +138,7 @@ export interface IDashboardPlannedPayment {
 export interface IDashboardData {
   monthlyIncome: number;
   monthlyExpenses: number;
+  savings: number;
   balance: number;
   expensesByCategory: IDashboardExpenseByCategory[];
   expensesByPerson: IDashboardExpenseByPerson[];
@@ -203,11 +208,22 @@ export class DashboardContextService {
   private _getPaidAmountForCurrentMonth(payments: { amount: any; dueDate: Date; paidAt: Date }[]): number {
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
+    return this._getPaidAmountForRange(payments, monthStart, nextMonthStart);
+  }
+
+  private _getPaidAmountForRange(
+    payments: { amount: any; dueDate: Date; paidAt?: Date }[],
+    rangeStart: Date,
+    rangeEnd: Date,
+  ): number {
     return payments
-      .filter((p) => new Date(p.dueDate) >= monthStart && new Date(p.dueDate) <= monthEnd)
-      .reduce((sum, p) => sum + Number(p.amount), 0);
+      .filter((payment) => {
+        const dueDate = new Date(payment.dueDate);
+        return dueDate >= rangeStart && dueDate < rangeEnd;
+      })
+      .reduce((sum, payment) => sum + Number(payment.amount), 0);
   }
 
   private _computeBillStatus(dueDay: number, paidAmount: number, billAmount: number): string {
@@ -355,6 +371,86 @@ export class DashboardContextService {
     return createdAt;
   }
 
+  private _isWithinRange(date: Date, rangeStart: Date, rangeEnd: Date): boolean {
+    return date >= rangeStart && date < rangeEnd;
+  }
+
+  private _resolveCategoryName(data: any, categoryFieldId: string | null): string {
+    const rawValue = categoryFieldId ? data?.[categoryFieldId] : data?.col_category;
+    const resolved = Array.isArray(rawValue)
+      ? rawValue.find((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      : rawValue;
+
+    return typeof resolved === 'string' && resolved.trim().length > 0
+      ? resolved
+      : 'Bez kategorii';
+  }
+
+  private _resolvePersonName(data: any, columns: any[]): string | null {
+    const personColumn = columns.find((column: any) => column?.type === 'person');
+    const rawValue = personColumn ? data?.[personColumn.id] : data?.col_person;
+    return typeof rawValue === 'string' && rawValue.trim().length > 0 ? rawValue : null;
+  }
+
+  private async _resolveCurrentTemplateRange(
+    template: { id: string; billingPeriod?: any } | null,
+  ): Promise<{ rangeStart: Date; rangeEnd: Date }> {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+
+    const billingPeriod = (template?.billingPeriod as IBillingPeriodConfig | null) ?? null;
+    if (!template?.id || !billingPeriod?.type) {
+      return { rangeStart: monthStart, rangeEnd: nextMonthStart };
+    }
+
+    const { periodStart, periodEnd } = calculatePeriodBoundaries(billingPeriod, now);
+    const override = await this.prisma.billingPeriodOverride.findUnique({
+      where: {
+        templateId_periodStart: {
+          templateId: template.id,
+          periodStart,
+        },
+      },
+      select: { overrideResetDate: true },
+    });
+
+    return {
+      rangeStart: periodStart,
+      rangeEnd: override ? new Date(override.overrideResetDate) : periodEnd,
+    };
+  }
+
+  private _resolveFixedExpenseDueDateInRange(
+    fixedExpense: any,
+    rangeStart: Date,
+    rangeEnd: Date,
+  ): Date | null {
+    let dueDate = fixedExpense?.nextDueDate
+      ? new Date(fixedExpense.nextDueDate)
+      : this._computeNextDueDateByFrequency(
+          new Date(fixedExpense?.startDate ?? rangeStart),
+          fixedExpense?.frequency ?? 'MONTHLY',
+          fixedExpense?.dayOfMonth,
+        );
+
+    let guard = 0;
+    while (dueDate < rangeStart && guard < 512) {
+      dueDate = this._computeNextDueDateByFrequency(
+        dueDate,
+        fixedExpense?.frequency ?? 'MONTHLY',
+        fixedExpense?.dayOfMonth,
+      );
+      guard += 1;
+    }
+
+    if (fixedExpense?.endDate && dueDate > new Date(fixedExpense.endDate)) {
+      return null;
+    }
+
+    return this._isWithinRange(dueDate, rangeStart, rangeEnd) ? dueDate : null;
+  }
+
   private _monthKey(date: Date): string {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -403,17 +499,17 @@ export class DashboardContextService {
   async getDashboard(familyId: string): Promise<IDashboardData> {
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
     const [family, defaultTemplate, bills] = await Promise.all([
-      this.prisma.family.findUnique({ where: { id: familyId }, select: { tagMappings: true } }),
+      this.prisma.family.findUnique({
+        where: { id: familyId },
+        select: { tagMappings: true, dashboardConfig: true },
+      }),
       this.prisma.template.findFirst({
         where: { familyId, isDefault: true },
         include: {
           records: {
-            where: {
-              createdAt: { gte: monthStart, lte: monthEnd },
-            },
             orderBy: { createdAt: 'desc' },
           },
         },
@@ -422,7 +518,7 @@ export class DashboardContextService {
         where: {
           familyId,
           isActive: true,
-          paymentStartDate: { lte: monthEnd },
+          paymentStartDate: { lt: nextMonthStart },
           OR: [{ paymentEndDate: null }, { paymentEndDate: { gte: monthStart } }],
         },
         include: { payments: { orderBy: { paidAt: 'desc' } } },
@@ -430,21 +526,37 @@ export class DashboardContextService {
       }),
     ]);
 
-    const tagMappings = (family?.tagMappings as any) ?? {};
+    const tagMappings = ((family?.tagMappings as any) ?? {}) as {
+      income?: string;
+      expense?: string;
+      planning?: string;
+      savings?: string;
+    };
+    const dashboardConfig = this._normalizeDashboardConfig((family?.dashboardConfig as any) ?? {});
     const columns: any[] = (defaultTemplate?.columns as any[]) ?? [];
 
     // Build tag ID → name map for classification
     const tagIdToName = await this._buildTagIdToNameMap(familyId, tagMappings);
+    const savingsTagName = tagMappings.savings ? tagIdToName[tagMappings.savings] : undefined;
+    const categoryFieldId = dashboardConfig.categoryFieldId && columns.some((column: any) => column?.id === dashboardConfig.categoryFieldId)
+      ? dashboardConfig.categoryFieldId
+      : null;
 
     // Process template records
     let monthlyIncome = 0;
     let monthlyExpenses = 0;
+    let savings = 0;
     const categoryMap = new Map<string, number>();
     const personMap = new Map<string, number>();
     const recentRecords: IDashboardRecentRecord[] = [];
 
     if (defaultTemplate) {
-      for (const record of defaultTemplate.records) {
+      const filteredRecords = defaultTemplate.records.filter((record: any) => {
+        const recordDate = this._extractRecordDate(record.data, record.createdAt);
+        return this._isWithinRange(recordDate, monthStart, nextMonthStart);
+      });
+
+      for (const record of filteredRecords) {
         const data = record.data as any;
         const amount = this._extractRecordAmount(data, columns);
         const classification = this._classifyRecord(data, columns, tagMappings, tagIdToName);
@@ -454,21 +566,22 @@ export class DashboardContextService {
         } else if (classification === 'expense') {
           monthlyExpenses += amount;
 
-          const category = data?.col_category as string;
-          const person = data?.col_person as string;
-
-          if (category) {
-            categoryMap.set(category, (categoryMap.get(category) ?? 0) + amount);
+          const tagValues = this._readTagValues(data, columns);
+          if (savingsTagName && tagValues.includes(savingsTagName)) {
+            savings += amount;
           }
 
+          const category = this._resolveCategoryName(data, categoryFieldId);
+          categoryMap.set(category, (categoryMap.get(category) ?? 0) + amount);
+
+          const person = this._resolvePersonName(data, columns);
           if (person) {
             personMap.set(person, (personMap.get(person) ?? 0) + amount);
           }
         }
       }
 
-      // Get last 10 records
-      const last10 = defaultTemplate.records.slice(0, 10);
+      const last10 = filteredRecords.slice(0, 10);
       for (const record of last10) {
         recentRecords.push({
           id: record.id,
@@ -481,7 +594,7 @@ export class DashboardContextService {
     // Process bills
     const upcomingBills: IDashboardBill[] = bills.map((bill: any) => {
       const billAmount = Number(bill.amount);
-      const paidAmount = this._getPaidAmountForCurrentMonth(bill.payments);
+      const paidAmount = this._getPaidAmountForRange(bill.payments, monthStart, nextMonthStart);
 
       return {
         id: bill.id,
@@ -512,6 +625,7 @@ export class DashboardContextService {
     return {
       monthlyIncome,
       monthlyExpenses,
+      savings: this._round2(savings),
       balance: monthlyIncome - monthlyExpenses,
       expensesByCategory,
       expensesByPerson,
@@ -523,30 +637,38 @@ export class DashboardContextService {
 
   async getSummary(familyId: string): Promise<IDashboardSummary> {
     const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 
-    const [family, defaultTemplate, bills, fixedExpenses, savingsGoals, pendingReceiptOcrCount] = await Promise.all([
+    const [family, defaultTemplate] = await Promise.all([
       this.prisma.family.findUnique({ where: { id: familyId }, select: { tagMappings: true } }),
       this.prisma.template.findFirst({
         where: { familyId, isDefault: true },
         include: {
           records: {
-            where: { createdAt: { gte: monthStart, lte: monthEnd } },
+            orderBy: { createdAt: 'desc' },
           },
         },
       }),
+    ]);
+
+    const { rangeStart, rangeEnd } = await this._resolveCurrentTemplateRange(defaultTemplate);
+
+    const [bills, fixedExpenses, savingsGoals, pendingReceiptOcrCount] = await Promise.all([
       this.prisma.bill.findMany({
         where: {
           familyId,
           isActive: true,
-          paymentStartDate: { lte: monthEnd },
-          OR: [{ paymentEndDate: null }, { paymentEndDate: { gte: monthStart } }],
+          paymentStartDate: { lt: rangeEnd },
+          OR: [{ paymentEndDate: null }, { paymentEndDate: { gte: rangeStart } }],
         },
         include: { payments: { orderBy: { paidAt: 'desc' } } },
       }),
       this.prisma.fixedExpense.findMany({
-        where: { familyId, isActive: true },
+        where: {
+          familyId,
+          isActive: true,
+          startDate: { lt: rangeEnd },
+          OR: [{ endDate: null }, { endDate: { gte: rangeStart } }],
+        },
       }),
       this.prisma.savingsGoal.findMany({
         where: { familyId },
@@ -563,13 +685,17 @@ export class DashboardContextService {
     // Build tag ID → name map for classification
     const tagIdToName = await this._buildTagIdToNameMap(familyId, tagMappings);
 
-    // Calculate income and expenses from template records
+    // Calculate income, incurred expenses and planned expenses from template records
     let monthlyIncome = 0;
     let monthlyExpenses = 0;
+    let plannedCosts = 0;
 
     if (defaultTemplate) {
       for (const record of defaultTemplate.records) {
         const data = record.data as any;
+        const recordDate = this._extractRecordDate(data, record.createdAt);
+        if (!this._isWithinRange(recordDate, rangeStart, rangeEnd)) continue;
+
         const amount = this._extractRecordAmount(data, columns);
         const classification = this._classifyRecord(data, columns, tagMappings, tagIdToName);
 
@@ -577,51 +703,49 @@ export class DashboardContextService {
           monthlyIncome += amount;
         } else if (classification === 'expense') {
           monthlyExpenses += amount;
+        } else if (classification === 'planning') {
+          plannedCosts += amount;
         }
       }
     }
 
     const balance = monthlyIncome - monthlyExpenses;
 
-    // Planned costs: unpaid bills this month + active fixed expenses + remaining savings targets
-    let plannedCosts = 0;
+    // Upcoming payments list: current billing period only
     const upcomingPlannedPayments: IDashboardPlannedPayment[] = [];
 
-    // Unpaid bills (remaining amount for partially/unpaid bills)
     for (const bill of bills) {
+      const dueReference = (bill as any).paymentStartDate && new Date((bill as any).paymentStartDate) > rangeStart
+        ? new Date((bill as any).paymentStartDate)
+        : rangeStart;
+      const dueDate = this._computeNextDueDate(
+        bill.dueDay,
+        dueReference,
+        (bill as any).paymentEndDate ? new Date((bill as any).paymentEndDate) : null,
+      );
+      if (!this._isWithinRange(dueDate, rangeStart, rangeEnd)) continue;
+
       const billAmount = Number(bill.amount);
-      const paidAmount = this._getPaidAmountForCurrentMonth(bill.payments as any);
+      const paidAmount = this._getPaidAmountForRange(bill.payments as any, rangeStart, rangeEnd);
 
       if (paidAmount < billAmount) {
         const remaining = billAmount - paidAmount;
-        plannedCosts += remaining;
         upcomingPlannedPayments.push({
           id: bill.id,
           source: 'bill',
           name: bill.name,
           amount: Math.round(remaining * 100) / 100,
           currency: (bill as any).currency ?? 'PLN',
-          dueDate: this._computeNextDueDate(
-            bill.dueDay,
-            (bill as any).paymentStartDate ? new Date((bill as any).paymentStartDate) : null,
-            (bill as any).paymentEndDate ? new Date((bill as any).paymentEndDate) : null,
-          ),
+          dueDate,
         });
       }
     }
 
-    // Fixed expenses (monthly ones not yet reflected in records)
     for (const fe of fixedExpenses) {
-      const amount = Number(fe.amount);
-      plannedCosts += amount;
+      const dueDate = this._resolveFixedExpenseDueDateInRange(fe, rangeStart, rangeEnd);
+      if (!dueDate) continue;
 
-      const dueDate = (fe as any).nextDueDate
-        ? new Date((fe as any).nextDueDate)
-        : this._computeNextDueDateByFrequency(
-            new Date((fe as any).startDate ?? now),
-            (fe as any).frequency ?? 'MONTHLY',
-            (fe as any).dayOfMonth,
-          );
+      const amount = Number(fe.amount);
 
       upcomingPlannedPayments.push({
         id: fe.id,
@@ -639,19 +763,22 @@ export class DashboardContextService {
       const remaining = Number(goal.targetAmount) - deposited;
 
       if (remaining > 0 && goal.deadline) {
+        const deadline = new Date(goal.deadline);
+        if (deadline < rangeStart) continue;
+
         const monthsLeft = Math.max(
           1,
           (new Date(goal.deadline).getTime() - now.getTime()) / (1000 * 60 * 60 * 24 * 30),
         );
-        const estimatedMonthly = Math.round((remaining / monthsLeft) * 100) / 100;
-        plannedCosts += estimatedMonthly;
+        const estimatedMonthly = remaining / monthsLeft;
+        const estimatedForPeriod = this._round2(estimatedMonthly);
         upcomingPlannedPayments.push({
           id: goal.id,
           source: 'savings',
           name: goal.name,
-          amount: estimatedMonthly,
+          amount: estimatedForPeriod,
           currency: (goal as any).currency ?? 'PLN',
-          dueDate: new Date(goal.deadline),
+          dueDate: deadline < rangeEnd ? deadline : new Date(rangeEnd.getTime() - 1),
         });
       }
     }

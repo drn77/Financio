@@ -72,6 +72,16 @@ export class FixedExpenseContextService {
     return map;
   }
 
+  private async _loadFixedExpenseFieldConfigs(familyId: string): Promise<Record<string, any>> {
+    const family = await this.prisma.family.findUnique({
+      where: { id: familyId },
+      select: { dashboardConfig: true },
+    });
+    const dc = (family?.dashboardConfig as any) ?? {};
+    // Fixed expenses share the 'bills' config since they're the same concept
+    return dc?.expenseMappings?.bills?.fieldConfigs ?? {};
+  }
+
   private _extractAmount(colAmount: any): number {
     if (!colAmount) return 0;
     if (typeof colAmount === 'number') return colAmount;
@@ -179,6 +189,8 @@ export class FixedExpenseContextService {
       if (defaultTemplate) {
         const columns = (defaultTemplate.columns as any[]) ?? [];
         const maxSort = await this.recordActions.getMaxSortOrder(defaultTemplate.id);
+        const fieldConfigs = await this._loadFixedExpenseFieldConfigs(familyId);
+        const hasConfig = Object.keys(fieldConfigs).length > 0;
 
         const category = expense.categoryId
           ? await this.prisma.category.findFirst({ where: { id: expense.categoryId, familyId }, select: { name: true } })
@@ -191,20 +203,72 @@ export class FixedExpenseContextService {
             })
           : null;
 
-        const data: Record<string, any> = {
-          col_date: this._toIsoDate(paidAt),
-          col_amount: { amount, currency: (expense as any).currency ?? 'PLN' },
-          col_paid: true,
-          col_category: category?.name ? [category.name] : [],
-          col_person: person?.user?.firstName ?? person?.user?.username ?? '',
-          _fixedExpenseId: expense.id,
-          _fixedExpenseName: expense.name,
-          ...(typeof (expense as any).paymentTemplateData === 'object' && (expense as any).paymentTemplateData
-            ? ((expense as any).paymentTemplateData as Record<string, unknown>)
-            : {}),
-          ...(input.overrideTemplateData ?? {}),
+        // Source values
+        const sourceValues: Record<string, any> = {
+          name: expense.name,
+          amount: { amount, currency: (expense as any).currency ?? 'PLN' },
+          paidAt: this._toIsoDate(paidAt),
+          category: category?.name ? [category.name] : [],
+          person: person?.user?.firstName ?? person?.user?.username ?? '',
+          notes: (expense as any).notes ?? '',
         };
 
+        // Metadata always included
+        const data: Record<string, any> = {
+          _fixedExpenseId: expense.id,
+          _fixedExpenseName: expense.name,
+        };
+
+        if (hasConfig) {
+          // Config-driven mapping
+          const autoTagIdPool = new Set<string>();
+          for (const column of columns) {
+            const columnId = String(column?.id ?? '');
+            if (!columnId) continue;
+            const cfg = fieldConfigs[columnId];
+            if (!cfg || cfg.mode === 'none') continue;
+
+            if (cfg.mode === 'auto_tags' && column?.type === 'tag_group') {
+              for (const tagId of cfg.autoTagIds ?? []) autoTagIdPool.add(tagId);
+              continue;
+            }
+            if (cfg.mode === 'map' && cfg.sourceField) {
+              const value = sourceValues[cfg.sourceField];
+              if (value != null) data[columnId] = value;
+            }
+          }
+          // Resolve auto_tags
+          if (autoTagIdPool.size > 0) {
+            const tagNameMap = await this._buildTagIdToNameMap(familyId, Array.from(autoTagIdPool));
+            for (const column of columns) {
+              const cfg = fieldConfigs[column?.id];
+              if (!cfg || cfg.mode !== 'auto_tags' || column?.type !== 'tag_group') continue;
+              const names = (cfg.autoTagIds ?? []).map((id: string) => tagNameMap[id]).filter(Boolean);
+              if (names.length > 0) data[column.id] = names;
+            }
+          }
+          // Always mark paid
+          const paidCol = columns.find((c: any) => c?.type === 'checkbox' && /paid|oplac|zaplac|rozlicz/i.test(String(c?.id ?? '') + ' ' + String(c?.name ?? '')));
+          if (paidCol) data[paidCol.id] = true;
+          else data.col_paid = true;
+        } else {
+          // Legacy hardcoded mapping
+          data.col_date = this._toIsoDate(paidAt);
+          data.col_amount = sourceValues.amount;
+          data.col_paid = true;
+          data.col_category = category?.name ? [category.name] : [];
+          data.col_person = person?.user?.firstName ?? person?.user?.username ?? '';
+        }
+
+        // Merge per-item paymentTemplateData + overrides
+        Object.assign(data,
+          typeof (expense as any).paymentTemplateData === 'object' && (expense as any).paymentTemplateData
+            ? (expense as any).paymentTemplateData as Record<string, unknown>
+            : {},
+          input.overrideTemplateData ?? {},
+        );
+
+        // paymentTagId override (per-item tag)
         const configuredTagId = (expense as any).paymentTagId as string | undefined;
         if (configuredTagId) {
           const map = await this._buildTagIdToNameMap(familyId, [configuredTagId]);

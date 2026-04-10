@@ -17,6 +17,9 @@ export class SavingsActionsService {
     deadline?: Date;
     icon?: string;
     color?: string;
+    autoCreateExpense?: boolean;
+    paymentTagId?: string;
+    paymentTemplateData?: Record<string, any>;
   }) {
     return this.prisma.savingsGoal.create({
       data: {
@@ -27,6 +30,9 @@ export class SavingsActionsService {
         deadline: input.deadline,
         icon: input.icon,
         color: input.color,
+        autoCreateExpense: input.autoCreateExpense,
+        paymentTagId: input.paymentTagId,
+        paymentTemplateData: input.paymentTemplateData,
       },
       include: { deposits: true },
     });
@@ -83,6 +89,9 @@ export class SavingsActionsService {
     deadline?: Date;
     icon?: string;
     color?: string;
+    autoCreateExpense?: boolean;
+    paymentTagId?: string | null;
+    paymentTemplateData?: Record<string, any> | null;
   }) {
     const data: any = {};
 
@@ -92,6 +101,9 @@ export class SavingsActionsService {
     if (input.deadline !== undefined) data.deadline = input.deadline;
     if (input.icon !== undefined) data.icon = input.icon;
     if (input.color !== undefined) data.color = input.color;
+    if (input.autoCreateExpense !== undefined) data.autoCreateExpense = input.autoCreateExpense;
+    if (input.paymentTagId !== undefined) data.paymentTagId = input.paymentTagId;
+    if (input.paymentTemplateData !== undefined) data.paymentTemplateData = input.paymentTemplateData;
 
     return this.prisma.savingsGoal.update({
       where: { id, familyId },

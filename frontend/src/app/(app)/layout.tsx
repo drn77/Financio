@@ -57,7 +57,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <Sidebar />
       <div className="min-h-screen lg:ml-65 transition-all duration-300">
         <TopBar />
-        <main className="p-4 pt-4 lg:p-6">
+        <main className="px-4 py-4 lg:px-6 lg:py-6">
           {children}
         </main>
       </div>

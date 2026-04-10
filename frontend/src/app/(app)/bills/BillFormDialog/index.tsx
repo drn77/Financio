@@ -6,10 +6,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Tag } from '@/components/Tag';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
@@ -20,8 +23,6 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
-import { Badge } from '@/components/ui/badge';
-import { X } from 'lucide-react';
 import {
   EMPTY_FORM,
   FREQUENCY_LABELS,
@@ -42,6 +43,9 @@ interface Props {
   tags: ITagOption[];
   editingBill: IBill | null;
   isSubmitting: boolean;
+  savingsGoals: { id: string; name: string }[];
+  savingsTagId: string | null;
+  expenseTagGroups: Array<{ tagGroupId: string; columnName: string; mode: 'available' | 'select' | 'auto_tags'; autoTagIds: string[] }>;
 }
 
 export function BillFormDialog({
@@ -53,6 +57,9 @@ export function BillFormDialog({
   tags,
   editingBill,
   isSubmitting,
+  savingsGoals,
+  savingsTagId,
+  expenseTagGroups,
 }: Props) {
   const hasInvalidDateRange =
     !!form.paymentStartDate
@@ -99,9 +106,23 @@ export function BillFormDialog({
     return acc;
   }, {});
 
+  const allGroupedTags = Object.entries(groupedTags)
+    .map(([groupName, groupTags]) => [groupName, groupTags] as const)
+    .filter(([, groupTags]) => groupTags.length > 0);
+
+  const expenseTagGroupIds = new Set(expenseTagGroups.map((group) => group.tagGroupId));
+
+  const transitionGroupedTags = allGroupedTags
+    .filter(([, groupTags]) => groupTags.some((tag) => expenseTagGroupIds.has(tag.tagGroupId)))
+    .map(([groupName, groupTags]) => [groupName, groupTags.filter((tag) => expenseTagGroupIds.has(tag.tagGroupId))] as const)
+    .filter(([, groupTags]) => groupTags.length > 0);
+  const transitionTags = transitionGroupedTags.flatMap(([, groupTags]) => groupTags);
+  const beforePaymentTagName = transitionTags.find((tag) => tag.id === form.tagBeforePaymentId)?.name ?? 'Brak';
+  const afterPaymentTagName = transitionTags.find((tag) => tag.id === form.tagAfterPaymentId)?.name ?? 'Brak';
+
   return (
     <Dialog open={open} onOpenChange={_handleClose}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
@@ -212,11 +233,15 @@ export function BillFormDialog({
             </div>
           </div>
 
-          {tags.length > 0 && (
+          {allGroupedTags.length > 0 && (
             <div>
-              <Label>Tagi</Label>
+              <Label>Tagi cyklicznego wydatku</Label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Te tagi opisują sam cykliczny wydatek. Jeśli chcesz, żeby trafiały też do wpisu na liście wydatków,
+                ustaw odpowiednie mapowanie w sekcji Mapowania.
+              </p>
               <div className="mt-1.5 space-y-2">
-                {Object.entries(groupedTags).map(([groupName, groupTags]) => (
+                {allGroupedTags.map(([groupName, groupTags]) => (
                   <div key={groupName}>
                     <span className="text-xs font-medium text-muted-foreground">{groupName}</span>
                     <div className="mt-1 flex flex-wrap gap-1.5">
@@ -224,26 +249,45 @@ export function BillFormDialog({
                         const isSelected = form.tagIds.includes(tag.id);
 
                         return (
-                          <Badge
+                          <button
                             key={tag.id}
-                            variant={isSelected ? 'default' : 'outline'}
-                            className="cursor-pointer select-none transition-colors"
-                            style={
-                              isSelected
-                                ? { backgroundColor: tag.color, borderColor: tag.color }
-                                : { borderColor: tag.color, color: tag.color }
-                            }
+                            type="button"
+                            className="cursor-pointer select-none"
                             onClick={() => _toggleTag(tag.id)}
                           >
-                            {tag.name}
-                            {isSelected && <X className="ml-1 h-3 w-3" />}
-                          </Badge>
+                            <Tag name={tag.name} color={tag.color} icon={tag.icon} groupName={tag.groupName} selected={isSelected} />
+                          </button>
                         );
                       })}
                     </div>
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {savingsTagId && form.tagIds.includes(savingsTagId) && savingsGoals.length > 0 && (
+            <div>
+              <Label>Cel oszczędnościowy</Label>
+              <Select
+                value={form.savingsGoalId || '__none'}
+                onValueChange={(value) => _updateField('savingsGoalId', value === '__none' ? '' : value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Wybierz cel" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none">Brak</SelectItem>
+                  {savingsGoals.map((goal) => (
+                    <SelectItem key={goal.id} value={goal.id}>
+                      {goal.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">
+                Przy opłaceniu rachunku kwota zostanie automatycznie dodana jako wpłata do wybranego celu.
+              </p>
             </div>
           )}
 
@@ -273,49 +317,6 @@ export function BillFormDialog({
             </div>
           </div>
 
-          {tags.length > 0 && (
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>Tag przed opłaceniem</Label>
-                <Select
-                  value={form.tagBeforePaymentId || '__none'}
-                  onValueChange={(value) => _updateField('tagBeforePaymentId', value === '__none' ? '' : value)}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Brak" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none">Brak</SelectItem>
-                    {tags.map((tag) => (
-                      <SelectItem key={tag.id} value={tag.id}>
-                        {tag.groupName}: {tag.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>Tag po opłaceniu</Label>
-                <Select
-                  value={form.tagAfterPaymentId || '__none'}
-                  onValueChange={(value) => _updateField('tagAfterPaymentId', value === '__none' ? '' : value)}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Brak" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none">Brak</SelectItem>
-                    {tags.map((tag) => (
-                      <SelectItem key={tag.id} value={tag.id}>
-                        {tag.groupName}: {tag.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          )}
-
           <div className="flex items-center gap-2">
             <Checkbox
               id="bill-auto-expense"
@@ -325,9 +326,81 @@ export function BillFormDialog({
               }
             />
             <Label htmlFor="bill-auto-expense" className="cursor-pointer text-sm font-normal">
-              Automatycznie twórz wydatek przy opłaceniu
+              Automatycznie dodawaj wydatek do bieżącego okresu rozliczeniowego
             </Label>
           </div>
+
+          {form.autoCreateExpense && (
+            <div className="space-y-3 rounded-md border p-3">
+              <div>
+                <Label className="text-sm font-semibold">Powiązanie z listą wydatków</Label>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Wpis pojawia się automatycznie na liście wydatków, a po kliknięciu „Opłać” jego tag statusowy zmienia się zgodnie z tym ustawieniem.
+                </p>
+              </div>
+
+              {transitionTags.length > 0 ? (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div>
+                    <Label>Tag przy automatycznym dodaniu</Label>
+                    <p className="mt-1 text-xs text-muted-foreground">Aktualnie: {beforePaymentTagName}</p>
+                    <Select
+                      value={form.tagBeforePaymentId || '__none'}
+                      onValueChange={(value) => _updateField('tagBeforePaymentId', value === '__none' ? '' : value)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Brak tagu" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none">Brak</SelectItem>
+                        {transitionGroupedTags.map(([groupName, groupTags]) => (
+                          <SelectGroup key={`before-${groupName}`}>
+                            <SelectLabel>{groupName}</SelectLabel>
+                            {groupTags.map((tag) => (
+                              <SelectItem key={tag.id} value={tag.id}>{tag.name}</SelectItem>
+                            ))}
+                          </SelectGroup>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div>
+                    <Label>Tag po kliknięciu „Opłać”</Label>
+                    <p className="mt-1 text-xs text-muted-foreground">Aktualnie: {afterPaymentTagName}</p>
+                    <Select
+                      value={form.tagAfterPaymentId || '__none'}
+                      onValueChange={(value) => _updateField('tagAfterPaymentId', value === '__none' ? '' : value)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Brak tagu" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none">Brak</SelectItem>
+                        {transitionGroupedTags.map(([groupName, groupTags]) => (
+                          <SelectGroup key={`after-${groupName}`}>
+                            <SelectLabel>{groupName}</SelectLabel>
+                            {groupTags.map((tag) => (
+                              <SelectItem key={tag.id} value={tag.id}>{tag.name}</SelectItem>
+                            ))}
+                          </SelectGroup>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                  Brak dostępnych grup tagów w szablonie wydatków. Dodaj kolumnę typu grupa tagów w domyślnym szablonie wydatków,
+                  aby ustawić tag przed i po zapłacie.
+                </div>
+              )}
+
+              <p className="text-xs text-muted-foreground">
+                Przykład: wpis może zostać dodany z tagiem „Do opłacenia”, a po opłaceniu automatycznie zmienić się na „Opłacone”.
+              </p>
+            </div>
+          )}
 
           <div>
             <Label htmlFor="bill-notes">Notatki</Label>

@@ -7,9 +7,14 @@ import { Select as SelectPrimitive } from "radix-ui"
 import { cn } from "@/lib/utils"
 
 function Select({
+  className,
   ...props
-}: React.ComponentProps<typeof SelectPrimitive.Root>) {
-  return <SelectPrimitive.Root data-slot="select" {...props} />
+}: React.ComponentProps<typeof SelectPrimitive.Root> & { className?: string }) {
+  return (
+    <div className={className}>
+      <SelectPrimitive.Root data-slot="select" {...props} />
+    </div>
+  )
 }
 
 function SelectGroup({

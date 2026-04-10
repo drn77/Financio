@@ -52,6 +52,7 @@ import { AddExpenseDialog } from '@/components/AddExpenseDialog';
 interface DashboardData {
   monthlyIncome: number;
   monthlyExpenses: number;
+  savings: number;
   balance: number;
   expensesByCategory: { category: string; amount: number }[];
   expensesByPerson: { person: string; amount: number }[];
@@ -86,6 +87,24 @@ function formatPLN(amount: number) {
   return new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN' }).format(amount);
 }
 
+function normalizeAmount(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeDashboardData(input: any): DashboardData {
+  return {
+    monthlyIncome: normalizeAmount(input?.monthlyIncome),
+    monthlyExpenses: normalizeAmount(input?.monthlyExpenses),
+    savings: normalizeAmount(input?.savings),
+    balance: normalizeAmount(input?.balance),
+    expensesByCategory: Array.isArray(input?.expensesByCategory) ? input.expensesByCategory : [],
+    expensesByPerson: Array.isArray(input?.expensesByPerson) ? input.expensesByPerson : [],
+    upcomingBills: Array.isArray(input?.upcomingBills) ? input.upcomingBills : [],
+    recentRecords: Array.isArray(input?.recentRecords) ? input.recentRecords : [],
+  };
+}
+
 export default function DashboardPage() {
   const { user } = useAuth();
   const [data, setData] = useState<DashboardData | null>(null);
@@ -96,18 +115,25 @@ export default function DashboardPage() {
 
   const loadDashboard = useCallback(async () => {
     try {
+      try {
+        await api.syncBillAutoExpenses();
+      } catch (error) {
+        console.error('Failed to sync recurring expenses for dashboard:', error);
+      }
+
       const result = await api.getDashboard();
-      setData(result as DashboardData);
+      setData(normalizeDashboardData(result));
     } catch {
-      setData({
+      setData(normalizeDashboardData({
         monthlyIncome: 0,
         monthlyExpenses: 0,
+        savings: 0,
         balance: 0,
         expensesByCategory: [],
         expensesByPerson: [],
         upcomingBills: [],
         recentRecords: [],
-      });
+      }));
     } finally {
       setLoading(false);
     }
@@ -115,6 +141,15 @@ export default function DashboardPage() {
 
   useEffect(() => {
     loadDashboard();
+  }, [loadDashboard]);
+
+  useEffect(() => {
+    const handleSummaryRefresh = () => {
+      void loadDashboard();
+    };
+
+    window.addEventListener('financio:summary-refresh', handleSummaryRefresh);
+    return () => window.removeEventListener('financio:summary-refresh', handleSummaryRefresh);
   }, [loadDashboard]);
 
   useEffect(() => {
@@ -146,10 +181,13 @@ export default function DashboardPage() {
 
   if (!data) return null;
 
+  const incomeValue = normalizeAmount(data.monthlyIncome);
+  const expensesValue = normalizeAmount(data.monthlyExpenses);
+  const savingsValue = normalizeAmount(data.savings);
+  const balanceValue = normalizeAmount(data.balance);
+
   const monthNames = ['Styczeń','Luty','Marzec','Kwiecień','Maj','Czerwiec','Lipiec','Sierpień','Wrzesień','Październik','Listopad','Grudzień'];
   const currentMonth = monthNames[new Date().getMonth()];
-
-  const savings = data.monthlyIncome - data.monthlyExpenses;
 
   return (
     <div className="space-y-6">
@@ -222,8 +260,8 @@ export default function DashboardPage() {
               </div>
             </div>
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Bilans</p>
-            <p className={`text-lg font-bold sm:text-2xl mt-1 ${data.balance >= 0 ? 'text-primary' : 'text-destructive'}`}>
-              {formatPLN(data.balance)}
+            <p className={`text-lg font-bold sm:text-2xl mt-1 ${balanceValue >= 0 ? 'text-primary' : 'text-destructive'}`}>
+              {formatPLN(balanceValue)}
             </p>
           </CardContent>
         </Card>
@@ -238,11 +276,11 @@ export default function DashboardPage() {
             </div>
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Przychody</p>
             <p className="text-lg font-bold sm:text-2xl mt-1 text-primary">
-              {formatPLN(data.monthlyIncome)}
+              {formatPLN(incomeValue)}
             </p>
             <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
               <ArrowUpRight className="h-3 w-3 text-primary" />
-              Ten miesiąc
+              Bieżący okres
             </div>
           </CardContent>
         </Card>
@@ -256,9 +294,13 @@ export default function DashboardPage() {
               </div>
             </div>
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Oszczędności</p>
-            <p className={`text-lg font-bold sm:text-2xl mt-1 ${savings >= 0 ? 'text-blue-500' : 'text-destructive'}`}>
-              {formatPLN(savings)}
+            <p className={`text-lg font-bold sm:text-2xl mt-1 ${savingsValue >= 0 ? 'text-blue-500' : 'text-destructive'}`}>
+              {formatPLN(savingsValue)}
             </p>
+            <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
+              <ArrowUpRight className="h-3 w-3 text-blue-500" />
+              Bieżący okres
+            </div>
           </CardContent>
         </Card>
 
@@ -272,11 +314,11 @@ export default function DashboardPage() {
             </div>
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Wydatki</p>
             <p className="text-lg font-bold sm:text-2xl mt-1 text-destructive">
-              {formatPLN(data.monthlyExpenses)}
+              {formatPLN(expensesValue)}
             </p>
             <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
               <ArrowDownRight className="h-3 w-3 text-destructive" />
-              Ten miesiąc
+              Bieżący okres
             </div>
           </CardContent>
         </Card>

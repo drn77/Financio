@@ -86,6 +86,10 @@ export class CreateBillDto {
   tagAfterPaymentId?: string;
 
   @IsOptional()
+  @IsString()
+  savingsGoalId?: string;
+
+  @IsOptional()
   @IsArray()
   @IsUUID('4', { each: true })
   tagIds?: string[];

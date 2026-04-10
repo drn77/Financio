@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, IsDateString } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsDateString, IsBoolean, IsObject } from 'class-validator';
 
 export class UpdateGoalDto {
   @IsOptional()
@@ -24,4 +24,16 @@ export class UpdateGoalDto {
   @IsOptional()
   @IsString()
   color?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  autoCreateExpense?: boolean;
+
+  @IsOptional()
+  @IsString()
+  paymentTagId?: string;
+
+  @IsOptional()
+  @IsObject()
+  paymentTemplateData?: Record<string, any>;
 }

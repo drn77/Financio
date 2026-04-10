@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
+import { Tag } from '@/components/Tag';
 import {
   Select,
   SelectContent,
@@ -72,6 +73,9 @@ import {
 import { ExpenseFilters, EMPTY_FILTERS, type IExpenseFilterState } from './ExpenseFilters';
 import { ExpenseSummary } from './ExpenseSummary';
 import { CSVImportDialog } from './CSVImportDialog';
+import { BillingPeriodBar } from './BillingPeriodBar';
+import { BudgetProgressBar } from './BudgetProgressBar';
+import type { IBillingPeriodConfig } from '@shared/models';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -93,6 +97,7 @@ interface ColumnDef {
 interface RecordRow {
   id?: string;
   data: Record<string, any>;
+  createdAt?: string;
   isNew?: boolean;
   isDirty?: boolean;
 }
@@ -126,6 +131,18 @@ function getCellSortValue(data: Record<string, any>, colId: string): string | nu
   return String(v);
 }
 
+function sortRecordsByCreatedAtDesc(records: RecordRow[]): RecordRow[] {
+  return [...records].sort((a, b) => {
+    const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+
+    if (aTime !== bTime) return bTime - aTime;
+    if (a.isNew && !b.isNew) return -1;
+    if (!a.isNew && b.isNew) return 1;
+    return 0;
+  });
+}
+
 const ROWS_PER_PAGE = 50;
 
 export default function ExpensesPage() {
@@ -137,7 +154,6 @@ export default function ExpensesPage() {
   const [tagGroups, setTagGroups] = useState<any[]>([]);
   const [tagMappings, setTagMappings] = useState<{ income?: string; expense?: string; planning?: string; costs?: string; savings?: string }>({});
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [receiptDialogOpen, setReceiptDialogOpen] = useState(false);
   const [receiptImage, setReceiptImage] = useState<string | null>(null);
   const [receiptLoading, setReceiptLoading] = useState(false);
@@ -145,24 +161,99 @@ export default function ExpensesPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<{ rowIndex: number } | null>(null);
   const hasUnsaved = useRef(false);
   const deletedIdsRef = useRef<string[]>([]);
+  const allRecordsRef = useRef<RecordRow[]>([]);
+  const templateIdRef = useRef<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveAllRef = useRef<() => Promise<void>>(async () => {});
 
+  // Billing period state
+  const [billingPeriodConfig, setBillingPeriodConfig] = useState<IBillingPeriodConfig | null>(null);
+  const [periodDateRange, setPeriodDateRange] = useState<{ from: string; to: string } | null>(null);
+  const [periodInfo, setPeriodInfo] = useState<any>(null);
+
+  const handlePeriodChange = useCallback((from: string, to: string) => {
+    setPeriodDateRange({ from, to });
+  }, []);
+
   const triggerAutoSave = useCallback(() => {
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current = setTimeout(() => {
       saveAllRef.current();
-    }, 1000);
+    }, 500);
+  }, []);
+
+  const flushPendingChanges = useCallback(async (mode: 'normal' | 'keepalive' = 'normal') => {
+    if (!hasUnsaved.current) return;
+
+    const templateId = templateIdRef.current;
+    if (!templateId) return;
+
+    const payload = allRecordsRef.current.map((record, index) => ({
+      id: record.id,
+      data: record.data,
+      sortOrder: index,
+    }));
+    const deletedIds = [...deletedIdsRef.current];
+
+    try {
+      if (mode === 'keepalive') {
+        api.bulkUpdateRecordsKeepalive(templateId, payload, deletedIds);
+        return;
+      }
+
+      await api.bulkUpdateRecords(templateId, payload, deletedIds);
+      hasUnsaved.current = false;
+      deletedIdsRef.current = [];
+      window.dispatchEvent(new Event('financio:summary-refresh'));
+    } catch (error) {
+      console.error('Flush before unload failed:', error);
+    }
   }, []);
 
   useEffect(() => {
+    allRecordsRef.current = allRecords;
+  }, [allRecords]);
+
+  useEffect(() => {
+    templateIdRef.current = template?.id ?? null;
+  }, [template]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+        void saveAllRef.current();
+      }
+    };
+
+    const handlePageHide = () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      void flushPendingChanges('keepalive');
+    };
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasUnsaved.current) return;
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      void flushPendingChanges('keepalive');
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
     return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
       if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+      void flushPendingChanges();
     };
-  }, []);
+  }, [flushPendingChanges]);
 
   // Filtering, sorting, pagination state
   const [filters, setFilters] = useState<IExpenseFilterState>(EMPTY_FILTERS);
@@ -172,8 +263,11 @@ export default function ExpensesPage() {
   const [page, setPage] = useState(1);
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
-  const columns: ColumnDef[] = template?.columns ?? [];
-  const visibleColumns = columns.filter((c) => !hiddenColumns.has(c.id));
+  const columns = useMemo<ColumnDef[]>(() => template?.columns ?? [], [template?.columns]);
+  const visibleColumns = useMemo(
+    () => columns.filter((column) => !hiddenColumns.has(column.id)),
+    [columns, hiddenColumns],
+  );
 
   // Category color map
   const categoryColorMap = useMemo(() => {
@@ -215,12 +309,28 @@ export default function ExpensesPage() {
       setTagGroups(Array.isArray(tGroups) ? tGroups : []);
       setTagMappings(mappings ?? {});
 
+      try {
+        await api.syncBillAutoExpenses();
+      } catch (error) {
+        console.error('Failed to sync recurring expenses:', error);
+      }
+
+      // Load billing period config
+      if (tmpl.billingPeriod?.type) {
+        setBillingPeriodConfig(tmpl.billingPeriod as IBillingPeriodConfig);
+        try {
+          const pInfo = await api.getBillingPeriod(tmpl.id);
+          setPeriodInfo(pInfo);
+        } catch { /* no billing period */ }
+      }
+
       const result = await api.getRecords(tmpl.id, 1, 500);
       const rows: RecordRow[] = (result.records ?? []).map((r: any) => ({
         id: r.id,
         data: r.data,
+        createdAt: r.createdAt,
       }));
-      setAllRecords(rows);
+      setAllRecords(sortRecordsByCreatedAtDesc(rows));
     } catch (e) {
       console.error('Failed to load expenses:', e);
     } finally {
@@ -232,9 +342,27 @@ export default function ExpensesPage() {
     loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    const handleLinkedDataRefresh = () => {
+      void loadData();
+    };
+
+    window.addEventListener('financio:summary-refresh', handleLinkedDataRefresh);
+    return () => window.removeEventListener('financio:summary-refresh', handleLinkedDataRefresh);
+  }, [loadData]);
+
   // ─── Filtering ────────────────────────────────────
   const filteredRecords = useMemo(() => {
     let result = allRecords;
+
+    // Apply billing period filtering (if configured and no manual date filter)
+    if (periodDateRange && !filters.dateFrom && !filters.dateTo) {
+      result = result.filter((r) => {
+        const date = r.data.col_date;
+        if (!date) return true;
+        return date >= periodDateRange.from && date < periodDateRange.to;
+      });
+    }
 
     if (filters.search) {
       const q = filters.search.toLowerCase();
@@ -273,7 +401,7 @@ export default function ExpensesPage() {
     }
 
     return result;
-  }, [allRecords, filters]);
+  }, [allRecords, filters, periodDateRange]);
 
   // ─── Sorting ──────────────────────────────────────
   const sortedRecords = useMemo(() => {
@@ -326,12 +454,15 @@ export default function ExpensesPage() {
     for (const col of columns) {
       newData[col.id] = getDefaultValue(col, user?.firstName ?? user?.username ?? '');
     }
-    setAllRecords((prev) => [...prev, { data: newData, isNew: true, isDirty: true }]);
+    setAllRecords((prev) => [{
+      data: newData,
+      createdAt: new Date().toISOString(),
+      isNew: true,
+      isDirty: true,
+    }, ...prev]);
     hasUnsaved.current = true;
-    // Jump to last page
-    const newTotal = Math.ceil((allRecords.length + 1) / ROWS_PER_PAGE);
-    setPage(newTotal);
-  }, [columns, user, allRecords.length]);
+    setPage(1);
+  }, [columns, user]);
 
   const updateCell = useCallback((globalIndex: number, colId: string, value: any) => {
     setAllRecords((prev) => {
@@ -369,11 +500,15 @@ export default function ExpensesPage() {
         col_paid: false,
       };
       setAllRecords((prev) => {
-        const copy = [...prev];
-        copy.splice(globalIndex + 1, 0, { data: newData, isNew: true, isDirty: true });
-        return copy;
+        return [{
+          data: newData,
+          createdAt: new Date().toISOString(),
+          isNew: true,
+          isDirty: true,
+        }, ...prev];
       });
       hasUnsaved.current = true;
+      setPage(1);
     },
     [allRecords],
   );
@@ -394,7 +529,6 @@ export default function ExpensesPage() {
 
   const saveAll = useCallback(async () => {
     if (!template || !hasUnsaved.current) return;
-    setSaving(true);
     setSaveStatus('saving');
     try {
       const toSend = allRecords.map((r, i) => ({
@@ -409,12 +543,13 @@ export default function ExpensesPage() {
       deletedIdsRef.current = [];
 
       const result = await api.getRecords(template.id, 1, 500);
-      setAllRecords(
+      setAllRecords(sortRecordsByCreatedAtDesc(
         (result.records ?? []).map((r: any) => ({
           id: r.id,
           data: r.data,
+          createdAt: r.createdAt,
         })),
-      );
+      ));
       window.dispatchEvent(new Event('financio:summary-refresh'));
       setSaveStatus('saved');
       if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
@@ -422,8 +557,6 @@ export default function ExpensesPage() {
     } catch (e) {
       console.error('Save failed:', e);
       setSaveStatus('idle');
-    } finally {
-      setSaving(false);
     }
   }, [allRecords, template]);
   saveAllRef.current = saveAll;
@@ -501,9 +634,15 @@ export default function ExpensesPage() {
           <p className="text-sm text-muted-foreground">
             {sortedRecords.length} z {allRecords.length} wpisów
             {sortedRecords.length !== allRecords.length && ' (filtrowane)'}
+            {periodDateRange && !filters.dateFrom && !filters.dateTo && (
+              <span className="ml-1">• okres rozliczeniowy</span>
+            )}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={addRow}>
+            <Plus className="h-4 w-4 mr-1" /> Dodaj wiersz
+          </Button>
           <Button
             variant={showFilters ? 'default' : 'outline'}
             size="sm"
@@ -547,9 +686,6 @@ export default function ExpensesPage() {
           <Button variant="outline" size="sm" onClick={exportCSV}>
             <Download className="h-4 w-4 mr-1" /> CSV
           </Button>
-          <Button variant="outline" size="sm" onClick={addRow}>
-            <Plus className="h-4 w-4 mr-1" /> Dodaj
-          </Button>
           {saveStatus === 'saving' && (
             <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" /> Zapisywanie...
@@ -577,6 +713,24 @@ export default function ExpensesPage() {
       {/* Summary */}
       <ExpenseSummary records={sortedRecords} categories={categories} />
 
+      {/* Billing Period Bar */}
+      {billingPeriodConfig?.type && template && (
+        <BillingPeriodBar
+          templateId={template.id}
+          billingPeriodConfig={billingPeriodConfig}
+          onPeriodChange={handlePeriodChange}
+        />
+      )}
+
+      {/* Budget Progress Bar */}
+      {billingPeriodConfig?.budgetAmount && billingPeriodConfig.budgetAmount > 0 && periodInfo && (
+        <BudgetProgressBar
+          records={filteredRecords}
+          budgetAmount={billingPeriodConfig.budgetAmount}
+          periodProgress={periodInfo.progress ?? 0}
+        />
+      )}
+
       {/* Dynamic Table */}
       <div className="rounded-lg border bg-card overflow-x-auto">
         <Table>
@@ -586,7 +740,7 @@ export default function ExpensesPage() {
               {visibleColumns.map((col) => (
                 <TableHead
                   key={col.id}
-                  className="min-w-[120px] cursor-pointer select-none hover:bg-accent/50 transition-colors"
+                  className="min-w-30 cursor-pointer select-none hover:bg-accent/50 transition-colors"
                   onClick={() => handleSort(col.id)}
                 >
                   <span className="flex items-center gap-1">
@@ -650,9 +804,7 @@ export default function ExpensesPage() {
                             value={row.data[col.id]}
                             onChange={(v) => updateCell(globalIdx, col.id, v)}
                             onBlur={triggerAutoSave}
-                            categories={categories}
                             familyMembers={familyMembers}
-                            categoryColorMap={categoryColorMap}
                             tagGroups={tagGroups}
                             tagColorMap={tagColorMap}
                             tagMappings={tagMappings}
@@ -736,11 +888,6 @@ export default function ExpensesPage() {
         </div>
       )}
 
-      {/* Quick add at bottom */}
-      <Button variant="ghost" size="sm" onClick={addRow} className="w-full border border-dashed">
-        <Plus className="h-4 w-4 mr-1" /> Nowy wiersz
-      </Button>
-
       {/* Delete confirmation */}
       <AlertDialog open={deleteConfirm !== null} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
         <AlertDialogContent>
@@ -764,7 +911,7 @@ export default function ExpensesPage() {
 
       {/* Receipt image dialog */}
       <Dialog open={receiptDialogOpen} onOpenChange={setReceiptDialogOpen}>
-        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Camera className="h-5 w-5" />
@@ -813,9 +960,7 @@ function CellEditor({
   value,
   onChange,
   onBlur,
-  categories,
   familyMembers,
-  categoryColorMap,
   tagGroups,
   tagColorMap,
   tagMappings,
@@ -826,9 +971,7 @@ function CellEditor({
   value: any;
   onChange: (v: any) => void;
   onBlur?: () => void;
-  categories: any[];
   familyMembers: any[];
-  categoryColorMap: Record<string, string>;
   tagGroups: any[];
   tagColorMap: Record<string, string>;
   tagMappings: { income?: string; expense?: string; planning?: string; costs?: string; savings?: string };
@@ -976,28 +1119,19 @@ function CellEditor({
           <PopoverTrigger asChild>
             <button
               type="button"
-              className="flex flex-wrap gap-1 items-center min-h-[32px] w-full rounded-md px-2 py-1 text-sm border-0 bg-transparent hover:bg-accent/50 cursor-pointer text-left"
+              className="flex flex-wrap gap-1 items-center min-h-8 w-full rounded-md px-2 py-1 text-sm border-0 bg-transparent hover:bg-accent/50 cursor-pointer text-left"
             >
               {tags.length === 0 ? (
                 <span className="text-muted-foreground text-xs">Wybierz...</span>
               ) : (
                 tags.map((tag) => (
-                  <Badge
+                  <Tag
                     key={tag}
-                    variant="secondary"
-                    className="text-xs gap-1 pointer-events-none"
-                    style={{
-                      backgroundColor: tagColorMap[tag] ? `${tagColorMap[tag]}20` : undefined,
-                      color: tagColorMap[tag] || undefined,
-                      borderColor: tagColorMap[tag] || undefined,
-                    }}
-                  >
-                    <span
-                      className="inline-block h-2 w-2 rounded-full shrink-0"
-                      style={{ backgroundColor: tagColorMap[tag] || '#888' }}
-                    />
-                    {tag}
-                  </Badge>
+                    name={tag}
+                    color={tagColorMap[tag] || undefined}
+                    icon={availableTags.find((t: any) => t.name === tag)?.icon}
+                    className="pointer-events-none"
+                  />
                 ))
               )}
             </button>
@@ -1016,11 +1150,7 @@ function CellEditor({
                       className={`flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded-sm hover:bg-accent cursor-pointer text-left ${isSelected ? 'bg-accent/60 font-medium' : ''}`}
                       onClick={() => toggleTag(t.name)}
                     >
-                      <span
-                        className="inline-block h-2.5 w-2.5 rounded-full shrink-0"
-                        style={{ backgroundColor: t.color || '#888' }}
-                      />
-                      <span className="flex-1 truncate">{t.icon ? `${t.icon} ` : ''}{t.name}</span>
+                      <Tag name={t.name} color={t.color} icon={t.icon} className="pointer-events-none" />
                       {isSelected && <span className="text-primary">✓</span>}
                     </button>
                   );

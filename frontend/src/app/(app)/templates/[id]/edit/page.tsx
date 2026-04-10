@@ -23,7 +23,19 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Trash2, GripVertical, Save, ArrowLeft, Settings2 } from 'lucide-react';
-import { Plus } from 'lucide-react';
+import { Plus, Clock } from 'lucide-react';
+
+type BillingPeriodType = 'DAY' | 'WEEK' | 'MONTH' | 'QUARTER' | 'HALF_YEAR' | 'YEAR';
+
+interface IBillingPeriodConfig {
+  type: BillingPeriodType;
+  resetHour?: number;
+  resetDayOfWeek?: number;
+  resetDayOfMonth?: number;
+  resetMonth?: number;
+  resetDay?: number;
+  budgetAmount?: number;
+}
 
 
 interface IColumnDef {
@@ -89,6 +101,7 @@ export default function EditTemplatePage({ params }: { params: Promise<{ id: str
   const [loading, setLoading] = useState(true);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [tagGroups, setTagGroups] = useState<ITagGroup[]>([]);
+  const [billingPeriod, setBillingPeriod] = useState<IBillingPeriodConfig | null>(null);
 
   const loadTemplate = useCallback(async () => {
     try {
@@ -97,6 +110,7 @@ export default function EditTemplatePage({ params }: { params: Promise<{ id: str
       setDescription(tpl.description ?? '');
       setIsDefault(tpl.isDefault ?? false);
       setColumns((tpl.columns as IColumnDef[]) ?? []);
+      setBillingPeriod(tpl.billingPeriod ?? null);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   }, [id]);
@@ -154,6 +168,7 @@ export default function EditTemplatePage({ params }: { params: Promise<{ id: str
       await api.updateTemplate(id, {
         name, description: description || undefined, isDefault,
         columns: columns.map((c, i) => ({ ...c, width: c.width ?? 150, sortOrder: i })),
+        billingPeriod: billingPeriod ?? undefined,
       });
       router.push('/templates');
     } catch (e) { console.error(e); }
@@ -187,6 +202,148 @@ export default function EditTemplatePage({ params }: { params: Promise<{ id: str
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Clock className="h-4 w-4" />
+            Okres rozliczeniowy
+          </CardTitle>
+          {!billingPeriod ? (
+            <Button size="sm" variant="outline" onClick={() => setBillingPeriod({ type: 'MONTH', resetDayOfMonth: 1 })}>
+              <Plus className="h-4 w-4 mr-1" /> Konfiguruj
+            </Button>
+          ) : (
+            <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setBillingPeriod(null)}>
+              Usuń konfigurację
+            </Button>
+          )}
+        </CardHeader>
+        {billingPeriod && (
+          <CardContent className="space-y-3">
+            <div>
+              <Label>Typ okresu</Label>
+              <Select
+                value={billingPeriod.type}
+                onValueChange={(v) => {
+                  const type = v as BillingPeriodType;
+                  const base: IBillingPeriodConfig = { type, budgetAmount: billingPeriod.budgetAmount };
+                  if (type === 'DAY') base.resetHour = 0;
+                  else if (type === 'WEEK') base.resetDayOfWeek = 1;
+                  else if (type === 'MONTH') base.resetDayOfMonth = 1;
+                  else if (type === 'QUARTER') { base.resetMonth = 1; base.resetDay = 1; }
+                  else if (type === 'HALF_YEAR') { base.resetMonth = 1; base.resetDay = 1; }
+                  else if (type === 'YEAR') { base.resetMonth = 1; base.resetDay = 1; }
+                  setBillingPeriod(base);
+                }}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="DAY">Dzień</SelectItem>
+                  <SelectItem value="WEEK">Tydzień</SelectItem>
+                  <SelectItem value="MONTH">Miesiąc</SelectItem>
+                  <SelectItem value="QUARTER">Kwartał</SelectItem>
+                  <SelectItem value="HALF_YEAR">Półrocze</SelectItem>
+                  <SelectItem value="YEAR">Rok</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {billingPeriod.type === 'DAY' && (
+              <div>
+                <Label>Godzina resetu</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={23}
+                  value={billingPeriod.resetHour ?? 0}
+                  onChange={(e) => setBillingPeriod({ ...billingPeriod, resetHour: parseInt(e.target.value) || 0 })}
+                  placeholder="np. 6 (06:00)"
+                />
+                <p className="text-xs text-muted-foreground mt-1">Godzina, o której zaczyna się nowy dzień rozliczeniowy (0-23)</p>
+              </div>
+            )}
+
+            {billingPeriod.type === 'WEEK' && (
+              <div>
+                <Label>Dzień tygodnia resetu</Label>
+                <Select
+                  value={String(billingPeriod.resetDayOfWeek ?? 1)}
+                  onValueChange={(v) => setBillingPeriod({ ...billingPeriod, resetDayOfWeek: parseInt(v) })}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">Poniedziałek</SelectItem>
+                    <SelectItem value="2">Wtorek</SelectItem>
+                    <SelectItem value="3">Środa</SelectItem>
+                    <SelectItem value="4">Czwartek</SelectItem>
+                    <SelectItem value="5">Piątek</SelectItem>
+                    <SelectItem value="6">Sobota</SelectItem>
+                    <SelectItem value="7">Niedziela</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {billingPeriod.type === 'MONTH' && (
+              <div>
+                <Label>Dzień miesiąca resetu</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={31}
+                  value={billingPeriod.resetDayOfMonth ?? 1}
+                  onChange={(e) => setBillingPeriod({ ...billingPeriod, resetDayOfMonth: parseInt(e.target.value) || 1 })}
+                  placeholder="np. 10 (dzień wypłaty)"
+                />
+                <p className="text-xs text-muted-foreground mt-1">Np. 10 jeśli dostajesz wypłatę 10-go. Dla 31 — dostosowuje się do krótszych miesięcy.</p>
+              </div>
+            )}
+
+            {(billingPeriod.type === 'QUARTER' || billingPeriod.type === 'HALF_YEAR' || billingPeriod.type === 'YEAR') && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Miesiąc startowy</Label>
+                  <Select
+                    value={String(billingPeriod.resetMonth ?? 1)}
+                    onValueChange={(v) => setBillingPeriod({ ...billingPeriod, resetMonth: parseInt(v) })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {['Styczeń','Luty','Marzec','Kwiecień','Maj','Czerwiec','Lipiec','Sierpień','Wrzesień','Październik','Listopad','Grudzień'].map((m, i) => (
+                        <SelectItem key={i+1} value={String(i+1)}>{m}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Dzień startowy</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={31}
+                    value={billingPeriod.resetDay ?? 1}
+                    onChange={(e) => setBillingPeriod({ ...billingPeriod, resetDay: parseInt(e.target.value) || 1 })}
+                  />
+                </div>
+              </div>
+            )}
+
+            <div>
+              <Label>Budżet na okres (opcjonalnie)</Label>
+              <Input
+                type="number"
+                min={0}
+                step={0.01}
+                value={billingPeriod.budgetAmount ?? ''}
+                onChange={(e) => setBillingPeriod({ ...billingPeriod, budgetAmount: e.target.value ? parseFloat(e.target.value) : undefined })}
+                placeholder="np. 5000"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Maksymalna kwota wydatków na okres z paskiem postępu</p>
+            </div>
+          </CardContent>
+        )}
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-base">Kolumny ({columns.length})</CardTitle>
           <Button size="sm" onClick={addColumn}><Plus className="h-4 w-4 mr-1" /> Dodaj</Button>
         </CardHeader>
@@ -216,7 +373,7 @@ export default function EditTemplatePage({ params }: { params: Promise<{ id: str
       </Card>
 
       <Dialog open={!!editingCol} onOpenChange={(open) => { if (!open) setEditingCol(null); }}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md sm:max-w-md">
           <DialogHeader><DialogTitle>{editingCol?.name ? `Edytuj: ${editingCol.name}` : 'Nowa kolumna'}</DialogTitle></DialogHeader>
           {editingCol && (
             <div className="space-y-3">

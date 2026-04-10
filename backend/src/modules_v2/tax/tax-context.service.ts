@@ -1,6 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { TemplateActionsService } from '../template/template-actions.service';
+import { RecordActionsService } from '../template/record-actions.service';
 import { TaxForm, UpdateTaxConfigDto, ZusProfile, LumpSumPreset, BusinessProfile } from './dto/update-tax-config.dto';
+import { CreateTaxEntryDto } from './dto/create-tax-entry.dto';
+import { UpdateTaxEntryDto } from './dto/update-tax-entry.dto';
+import { PayTaxEntryDto } from './dto/pay-tax-entry.dto';
 
 type TagMappings = { income?: string; expense?: string; planning?: string; costs?: string; savings?: string };
 
@@ -72,7 +77,11 @@ export interface ITaxConfig {
 
 @Injectable()
 export class TaxContextService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly templateActions: TemplateActionsService,
+    private readonly recordActions: RecordActionsService,
+  ) {}
 
   private _getDefaultConfig(): ITaxConfig {
     const now = new Date();
@@ -462,5 +471,329 @@ export class TaxContextService {
         `Preset ryczałtu: ${config.lumpSumPreset} (stawka ${config.lumpSumRate}%).`,
       ],
     };
+  }
+
+  // ──────── Tax Entries ────────
+
+  private _mapEntry(entry: any) {
+    return {
+      ...entry,
+      amount: Number(entry.amount),
+      calculatedAmount: entry.calculatedAmount != null ? Number(entry.calculatedAmount) : null,
+    };
+  }
+
+  async getOrCreateMonthlyEntries(familyId: string, month?: number, year?: number) {
+    const now = new Date();
+    const targetMonth = month ?? now.getMonth() + 1;
+    const targetYear = year ?? now.getFullYear();
+
+    // Always recalculate from the tax calculator
+    const summary = await this.getMonthlyTaxSummary(familyId, targetMonth, targetYear);
+    const zusAmount = this._round2((summary.monthly.zus?.socialTotal ?? 0) + (summary.monthly.zus?.health ?? 0));
+    const pitAmount = this._round2(summary.monthly.pit ?? 0);
+
+    const autoEntries: Array<{ type: string; name: string; calculated: number }> = [
+      { type: 'ZUS', name: 'ZUS', calculated: zusAmount },
+      { type: 'PIT', name: 'Podatek dochodowy', calculated: pitAmount },
+    ];
+
+    // Upsert ZUS and PIT — create if missing, recalculate if unpaid
+    for (const { type, name, calculated } of autoEntries) {
+      const existing = await this.prisma.taxEntry.findFirst({
+        where: { familyId, month: targetMonth, year: targetYear, type },
+      });
+
+      if (!existing) {
+        await this.prisma.taxEntry.create({
+          data: {
+            familyId,
+            type,
+            name,
+            month: targetMonth,
+            year: targetYear,
+            calculatedAmount: calculated,
+            amount: calculated,
+          },
+        });
+      } else if (!existing.isPaid) {
+        const wasEdited = Number(existing.amount) !== Number(existing.calculatedAmount);
+        await this.prisma.taxEntry.update({
+          where: { id: existing.id },
+          data: {
+            calculatedAmount: calculated,
+            ...(wasEdited ? {} : { amount: calculated }),
+          },
+        });
+      }
+    }
+
+    // Copy recurring custom entries from previous month (only if they don't exist yet)
+    const prevMonth = targetMonth === 1 ? 12 : targetMonth - 1;
+    const prevYear = targetMonth === 1 ? targetYear - 1 : targetYear;
+    const recurring = await this.prisma.taxEntry.findMany({
+      where: { familyId, month: prevMonth, year: prevYear, isRecurring: true },
+    });
+
+    for (const rec of recurring) {
+      await this.prisma.taxEntry.upsert({
+        where: {
+          familyId_type_month_year_name: {
+            familyId,
+            type: rec.type,
+            month: targetMonth,
+            year: targetYear,
+            name: rec.name,
+          },
+        },
+        update: {},
+        create: {
+          familyId,
+          type: rec.type,
+          name: rec.name,
+          month: targetMonth,
+          year: targetYear,
+          calculatedAmount: null,
+          amount: Number(rec.amount),
+          isRecurring: true,
+        },
+      });
+    }
+
+    const entries = await this.prisma.taxEntry.findMany({
+      where: { familyId, month: targetMonth, year: targetYear },
+      orderBy: [{ type: 'asc' }, { name: 'asc' }],
+    });
+    return entries.map((e) => this._mapEntry(e));
+  }
+
+  async recalculateEntries(familyId: string, month?: number, year?: number) {
+    const now = new Date();
+    const targetMonth = month ?? now.getMonth() + 1;
+    const targetYear = year ?? now.getFullYear();
+
+    const summary = await this.getMonthlyTaxSummary(familyId, targetMonth, targetYear);
+    const zusAmount = this._round2((summary.monthly.zus?.socialTotal ?? 0) + (summary.monthly.zus?.health ?? 0));
+    const pitAmount = this._round2(summary.monthly.pit ?? 0);
+
+    const recalcMap: Record<string, number> = { ZUS: zusAmount, PIT: pitAmount };
+
+    for (const [type, calculated] of Object.entries(recalcMap)) {
+      const entry = await this.prisma.taxEntry.findFirst({
+        where: { familyId, month: targetMonth, year: targetYear, type, isPaid: false },
+      });
+      if (entry) {
+        const wasEdited = Number(entry.amount) !== Number(entry.calculatedAmount);
+        await this.prisma.taxEntry.update({
+          where: { id: entry.id },
+          data: {
+            calculatedAmount: calculated,
+            ...(wasEdited ? {} : { amount: calculated }),
+          },
+        });
+      } else {
+        await this.prisma.taxEntry.upsert({
+          where: {
+            familyId_type_month_year_name: {
+              familyId,
+              type,
+              month: targetMonth,
+              year: targetYear,
+              name: type === 'ZUS' ? 'ZUS' : 'Podatek dochodowy',
+            },
+          },
+          update: { calculatedAmount: calculated, amount: calculated },
+          create: {
+            familyId,
+            type,
+            name: type === 'ZUS' ? 'ZUS' : 'Podatek dochodowy',
+            month: targetMonth,
+            year: targetYear,
+            calculatedAmount: calculated,
+            amount: calculated,
+          },
+        });
+      }
+    }
+
+    const entries = await this.prisma.taxEntry.findMany({
+      where: { familyId, month: targetMonth, year: targetYear },
+      orderBy: [{ type: 'asc' }, { name: 'asc' }],
+    });
+    return entries.map((e) => this._mapEntry(e));
+  }
+
+  async createTaxEntry(familyId: string, input: CreateTaxEntryDto) {
+    const entry = await this.prisma.taxEntry.create({
+      data: {
+        familyId,
+        type: input.type,
+        name: input.name,
+        month: input.month,
+        year: input.year,
+        amount: input.amount,
+        notes: input.notes,
+        isRecurring: input.isRecurring ?? false,
+      },
+    });
+    return this._mapEntry(entry);
+  }
+
+  async updateTaxEntry(familyId: string, id: string, input: UpdateTaxEntryDto) {
+    const entry = await this.prisma.taxEntry.findFirst({ where: { id, familyId } });
+    if (!entry) throw new NotFoundException('Tax entry not found');
+
+    const updated = await this.prisma.taxEntry.update({
+      where: { id },
+      data: {
+        ...(input.amount !== undefined ? { amount: input.amount } : {}),
+        ...(input.notes !== undefined ? { notes: input.notes } : {}),
+      },
+    });
+    return this._mapEntry(updated);
+  }
+
+  async payTaxEntry(familyId: string, id: string, input: PayTaxEntryDto) {
+    const entry = await this.prisma.taxEntry.findFirst({ where: { id, familyId } });
+    if (!entry) throw new NotFoundException('Tax entry not found');
+
+    const paymentDate = input.paymentDate ? new Date(input.paymentDate) : new Date();
+    const amount = input.amount ?? Number(entry.amount);
+
+    const updated = await this.prisma.taxEntry.update({
+      where: { id },
+      data: { isPaid: true, paidAt: paymentDate, amount },
+    });
+
+    // Auto-create expense record
+    try {
+      const defaultTemplate = await this.templateActions.findDefaultTemplate(familyId);
+      if (defaultTemplate) {
+        const maxSort = await this.recordActions.getMaxSortOrder(defaultTemplate.id);
+        const autoExpenseData = await this._buildTaxAutoExpenseData(
+          familyId,
+          defaultTemplate.columns,
+          updated,
+          paymentDate,
+        );
+
+        await this.recordActions.createRecord({
+          templateId: defaultTemplate.id,
+          data: autoExpenseData,
+          sortOrder: maxSort + 1,
+        });
+      }
+    } catch (e) {
+      console.error('Tax auto-expense creation failed:', e);
+    }
+
+    return this._mapEntry(updated);
+  }
+
+  async deleteTaxEntry(familyId: string, id: string) {
+    const entry = await this.prisma.taxEntry.findFirst({ where: { id, familyId } });
+    if (!entry) throw new NotFoundException('Tax entry not found');
+
+    await this.prisma.taxEntry.delete({ where: { id } });
+    return { success: true };
+  }
+
+  // ──────── Auto-Expense for Tax Payment ────────
+
+  private _extractTemplateColumns(templateColumns: any): { id: string; type?: string; tagGroupId?: string }[] {
+    return Array.isArray(templateColumns)
+      ? templateColumns.filter((c: any) => c && typeof c.id === 'string')
+      : [];
+  }
+
+  private async _loadTaxFieldConfigs(familyId: string): Promise<Record<string, any>> {
+    const family = await this.prisma.family.findUnique({
+      where: { id: familyId },
+      select: { dashboardConfig: true },
+    });
+    const dc = (family?.dashboardConfig as any) ?? {};
+    return dc?.expenseMappings?.taxes?.fieldConfigs ?? {};
+  }
+
+  private async _buildTagIdToNameMapById(familyId: string, tagIds: string[]): Promise<Record<string, string>> {
+    if (!tagIds.length) return {};
+    const tags = await this.prisma.tag.findMany({
+      where: { id: { in: tagIds }, tagGroup: { familyId } },
+      select: { id: true, name: true },
+    });
+    const map: Record<string, string> = {};
+    for (const tag of tags) map[tag.id] = tag.name;
+    return map;
+  }
+
+  private async _buildTaxAutoExpenseData(
+    familyId: string,
+    templateColumnsRaw: any,
+    entry: any,
+    paymentDate: Date,
+  ): Promise<Record<string, any>> {
+    const columns = this._extractTemplateColumns(templateColumnsRaw);
+    const fieldConfigs = await this._loadTaxFieldConfigs(familyId);
+    const hasConfig = Object.keys(fieldConfigs).length > 0;
+
+    const sourceValues: Record<string, any> = {
+      name: entry.name,
+      type: entry.type,
+      amount: { amount: Number(entry.amount), currency: 'PLN' },
+      paymentDate: paymentDate.toISOString().split('T')[0],
+      notes: entry.notes ?? '',
+      description: `${entry.name} (${entry.month}/${entry.year})`,
+    };
+
+    const data: Record<string, any> = {
+      _taxEntryId: entry.id,
+      _taxType: entry.type,
+      _taxName: entry.name,
+      _taxPeriod: `${entry.month}/${entry.year}`,
+    };
+
+    if (hasConfig) {
+      const autoTagIdPool = new Set<string>();
+
+      for (const column of columns) {
+        const columnId = String(column.id);
+        const cfg = fieldConfigs[columnId];
+        if (!cfg || cfg.mode === 'none') continue;
+
+        if (cfg.mode === 'auto_tags' && column.type === 'tag_group') {
+          for (const tagId of cfg.autoTagIds ?? []) autoTagIdPool.add(tagId);
+          continue;
+        }
+
+        if (cfg.mode === 'map' && cfg.sourceField) {
+          const value = sourceValues[cfg.sourceField];
+          if (value != null) data[columnId] = value;
+        }
+      }
+
+      // Resolve auto_tags
+      if (autoTagIdPool.size > 0) {
+        const tagNameMap = await this._buildTagIdToNameMapById(familyId, Array.from(autoTagIdPool));
+        for (const column of columns) {
+          const cfg = fieldConfigs[column.id];
+          if (!cfg || cfg.mode !== 'auto_tags' || column.type !== 'tag_group') continue;
+          const names = (cfg.autoTagIds ?? []).map((id: string) => tagNameMap[id]).filter(Boolean);
+          if (names.length > 0) data[column.id] = names;
+        }
+      }
+
+      // Always mark as paid
+      const paidCol = columns.find((c: any) => c.type === 'checkbox' && /paid|oplac|zaplac|rozlicz/i.test(String(c.id ?? '') + ' ' + String(c.name ?? '')));
+      if (paidCol) data[paidCol.id] = true;
+      else data.col_paid = true;
+    } else {
+      // Legacy fallback
+      data.col_date = paymentDate.toISOString().split('T')[0];
+      data.col_amount = sourceValues.amount;
+      data.col_description = sourceValues.description;
+      data.col_paid = true;
+    }
+
+    return data;
   }
 }

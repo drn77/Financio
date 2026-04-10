@@ -34,6 +34,20 @@ interface ISummary {
 }
 
 type IPlannedPayment = ISummary['upcomingPlannedPayments'][number];
+type IEditablePaymentData = Partial<{
+  name: string;
+  amount: number;
+  dueDay: number;
+  notes: string;
+  targetAmount: number;
+  deadline: string;
+}>;
+type ISavingsGoalOption = {
+  id: string;
+  name?: string;
+  targetAmount?: number;
+  deadline?: string | null;
+};
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat('pl-PL', {
@@ -58,38 +72,49 @@ function sourceLabel(source: 'bill' | 'savings'): string {
 function useSummary() {
   const [summary, setSummary] = useState<ISummary | null>(null);
 
-  const refresh = useCallback(() => {
-    api.getDashboardSummary()
-      .then((data) => {
-        const upcomingPlannedPayments = (data.upcomingPlannedPayments ?? []).filter(
-          (
-            payment,
-          ): payment is {
-            id: string;
-            source: 'bill' | 'savings';
-            name: string;
-            amount: number;
-            currency: string;
-            dueDate: string;
-          } => payment.source === 'bill' || payment.source === 'savings',
-        );
+  const refresh = useCallback(async () => {
+    try {
+      await api.syncBillAutoExpenses();
+    } catch (error) {
+      console.error('Failed to sync recurring expenses for top bar:', error);
+    }
 
-        setSummary({
-          ...data,
-          upcomingPlannedPayments,
-        });
-      })
-      .catch(() => {});
+    try {
+      const data = await api.getDashboardSummary();
+      const upcomingPlannedPayments = (data.upcomingPlannedPayments ?? []).filter(
+        (
+          payment,
+        ): payment is {
+          id: string;
+          source: 'bill' | 'savings';
+          name: string;
+          amount: number;
+          currency: string;
+          dueDate: string;
+        } => payment.source === 'bill' || payment.source === 'savings',
+      );
+
+      setSummary({
+        ...data,
+        upcomingPlannedPayments,
+      });
+    } catch {
+      // Ignore summary refresh errors in the top bar.
+    }
   }, []);
 
   useEffect(() => {
     const handleSummaryRefresh = () => {
-      refresh();
+      void refresh();
     };
 
     // Initial fetch via interval with 0 delay to avoid sync setState in effect
-    const immediate = setTimeout(refresh, 0);
-    const interval = setInterval(refresh, 60_000);
+    const immediate = setTimeout(() => {
+      void refresh();
+    }, 0);
+    const interval = setInterval(() => {
+      void refresh();
+    }, 60_000);
     window.addEventListener('financio:summary-refresh', handleSummaryRefresh);
     return () => {
       clearTimeout(immediate);
@@ -111,7 +136,7 @@ export function TopBar() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [payAmount, setPayAmount] = useState('');
   const [payNotes, setPayNotes] = useState('');
-  const [editData, setEditData] = useState<Record<string, any>>({});
+  const [editData, setEditData] = useState<IEditablePaymentData>({});
 
   const refreshSummary = useCallback(() => {
     window.dispatchEvent(new Event('financio:summary-refresh'));
@@ -135,7 +160,7 @@ export function TopBar() {
         });
       } else {
         const goals = await api.getSavingsGoals();
-        const goal = (goals ?? []).find((g: any) => g.id === payment.id);
+        const goal = ((goals ?? []) as ISavingsGoalOption[]).find((entry) => entry.id === payment.id);
         setEditData({
           name: goal?.name ?? payment.name,
           targetAmount: Number(goal?.targetAmount ?? payment.amount ?? 0),

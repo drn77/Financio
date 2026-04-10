@@ -12,16 +12,19 @@ export interface IBillFormData {
   autoCreateExpense: boolean;
   reminderDays: string;
   budgetLimit: string;
+  savingsGoalId: string;
+  tagIds: string[];
   tagBeforePaymentId: string;
   tagAfterPaymentId: string;
-  tagIds: string[];
 }
 
 export interface ITagOption {
   id: string;
   name: string;
   color: string;
+  icon?: string | null;
   groupName: string;
+  tagGroupId: string;
 }
 
 export interface IFilterState {
@@ -42,9 +45,10 @@ export const EMPTY_FORM: IBillFormData = {
   autoCreateExpense: false,
   reminderDays: '3',
   budgetLimit: '',
+  savingsGoalId: '',
+  tagIds: [],
   tagBeforePaymentId: '',
   tagAfterPaymentId: '',
-  tagIds: [],
 };
 
 export type SortField = 'name' | 'amount' | 'dueDay' | 'status';

@@ -44,6 +44,7 @@ export class TemplateContextService {
       icon: input.icon,
       columns: input.columns as any,
       isDefault: input.isDefault ?? false,
+      billingPeriod: input.billingPeriod ?? undefined,
     });
   }
   // #endregion
@@ -66,6 +67,7 @@ export class TemplateContextService {
       ...(input.icon !== undefined && { icon: input.icon }),
       ...(input.columns !== undefined && { columns: input.columns as any }),
       ...(input.isDefault !== undefined && { isDefault: input.isDefault }),
+      ...(input.billingPeriod !== undefined && { billingPeriod: input.billingPeriod }),
     });
   }
   // #endregion

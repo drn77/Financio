@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
+import { Tag } from '@/components/Tag';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -213,14 +214,7 @@ export function BillCard({ bill, onPay, onEdit, onDelete, onViewHistory, onToggl
         {bill.tags.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {bill.tags.map((tag) => (
-              <Badge
-                key={tag.id}
-                variant="outline"
-                className="text-xs"
-                style={{ borderColor: tag.color, color: tag.color }}
-              >
-                {tag.name}
-              </Badge>
+              <Tag key={tag.id} name={tag.name} color={tag.color} icon={tag.icon} groupName={tag.groupName} />
             ))}
           </div>
         )}

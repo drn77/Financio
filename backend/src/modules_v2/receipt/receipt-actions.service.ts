@@ -22,6 +22,7 @@ export class ReceiptActionsService {
   private _mapReceipt(receipt: any) {
     return {
       ...receipt,
+      configurableFields: (receipt.configurableFields as any) ?? {},
       amount: Number(receipt.amount),
       items: (receipt.items ?? []).map((item: any) => ({
         ...item,
@@ -54,6 +55,7 @@ export class ReceiptActionsService {
     billId?: string;
     imageUrl?: string;
     notes?: string;
+    configurableFields?: Record<string, unknown>;
     ocrStatus?: 'PENDING' | 'COMPLETED' | 'FAILED';
     ocrError?: string;
     isApproved?: boolean;
@@ -75,6 +77,7 @@ export class ReceiptActionsService {
         billId: input.billId,
         imageUrl: input.imageUrl,
         notes: input.notes,
+        configurableFields: (input.configurableFields as any) ?? undefined,
         ocrStatus: (input.ocrStatus as any) ?? undefined,
         ocrError: input.ocrError,
         isApproved: input.isApproved,
@@ -254,6 +257,7 @@ export class ReceiptActionsService {
     billId?: string;
     imageUrl?: string;
     notes?: string;
+    configurableFields?: Record<string, unknown>;
     ocrStatus?: 'PENDING' | 'COMPLETED' | 'FAILED';
     ocrError?: string | null;
     isApproved?: boolean;
@@ -273,6 +277,7 @@ export class ReceiptActionsService {
     if (input.billId !== undefined) data.billId = input.billId;
     if (input.imageUrl !== undefined) data.imageUrl = input.imageUrl;
     if (input.notes !== undefined) data.notes = input.notes;
+    if (input.configurableFields !== undefined) data.configurableFields = (input.configurableFields as any) ?? {};
     if (input.ocrStatus !== undefined) data.ocrStatus = input.ocrStatus;
     if (input.ocrError !== undefined) data.ocrError = input.ocrError;
     if (input.isApproved !== undefined) data.isApproved = input.isApproved;

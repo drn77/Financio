@@ -2,9 +2,15 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { BillActionsService } from './bill-actions.service';
 import { TemplateActionsService } from '../template/template-actions.service';
 import { RecordActionsService } from '../template/record-actions.service';
+import { SavingsActionsService } from '../savings/savings-actions.service';
+import { PrismaService } from '../../shared/prisma/prisma.service';
 import { CreateBillDto } from './dto/create-bill.dto';
 import { UpdateBillDto } from './dto/update-bill.dto';
 import { PayBillDto } from './dto/pay-bill.dto';
+import {
+  calculatePeriodBoundaries,
+  type IBillingPeriodConfig,
+} from '../../shared/billing-period/billing-period.utils';
 
 @Injectable()
 export class BillContextService {
@@ -12,6 +18,8 @@ export class BillContextService {
     private readonly billActions: BillActionsService,
     private readonly templateActions: TemplateActionsService,
     private readonly recordActions: RecordActionsService,
+    private readonly savingsActions: SavingsActionsService,
+    private readonly prisma: PrismaService,
   ) {}
 
   // #region Private
@@ -21,35 +29,263 @@ export class BillContextService {
       : [];
   }
 
-  private _buildAutoExpenseData(
+  private async _loadBillFieldConfigs(familyId: string): Promise<Record<string, any>> {
+    const family = await this.prisma.family.findUnique({
+      where: { id: familyId },
+      select: { dashboardConfig: true },
+    });
+    const dc = (family?.dashboardConfig as any) ?? {};
+    return dc?.expenseMappings?.bills?.fieldConfigs ?? {};
+  }
+
+  private async _buildTagIdToNameMap(familyId: string, tagIds: string[]): Promise<Record<string, string>> {
+    if (!tagIds.length) return {};
+    const tags = await this.prisma.tag.findMany({
+      where: { id: { in: tagIds }, tagGroup: { familyId } },
+      select: { id: true, name: true },
+    });
+    const map: Record<string, string> = {};
+    for (const tag of tags) map[tag.id] = tag.name;
+    return map;
+  }
+
+  private _toIsoDate(date: Date): string {
+    return new Date(date).toISOString().split('T')[0];
+  }
+
+  private _clampDay(year: number, month: number, day: number): Date {
+    const maxDay = new Date(year, month + 1, 0).getDate();
+    return new Date(year, month, Math.min(Math.max(day, 1), maxDay));
+  }
+
+  private _addBillFrequency(date: Date, frequency: string, dueDay: number): Date {
+    switch (frequency) {
+      case 'DAILY':
+        return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
+      case 'WEEKLY':
+        return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 7);
+      case 'QUARTERLY':
+        return this._clampDay(date.getFullYear(), date.getMonth() + 3, dueDay);
+      case 'YEARLY':
+        return this._clampDay(date.getFullYear() + 1, date.getMonth(), dueDay);
+      case 'MONTHLY':
+      default:
+        return this._clampDay(date.getFullYear(), date.getMonth() + 1, dueDay);
+    }
+  }
+
+  private _resolveInitialOccurrenceDate(bill: any): Date {
+    const startDate = new Date(bill.paymentStartDate);
+    const frequency = String(bill.frequency ?? 'MONTHLY');
+
+    if (frequency === 'DAILY' || frequency === 'WEEKLY') {
+      return new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+    }
+
+    let occurrence = this._clampDay(startDate.getFullYear(), startDate.getMonth(), bill.dueDay);
+    while (occurrence < startDate) {
+      occurrence = this._addBillFrequency(occurrence, frequency, bill.dueDay);
+    }
+
+    return occurrence;
+  }
+
+  private _getOccurrencesInRange(bill: any, rangeStart: Date, rangeEnd: Date): Date[] {
+    const startDate = new Date(bill.paymentStartDate);
+    const endDate = bill.paymentEndDate ? new Date(bill.paymentEndDate) : null;
+    const occurrences: Date[] = [];
+
+    let occurrence = this._resolveInitialOccurrenceDate(bill);
+    while (occurrence < rangeStart) {
+      occurrence = this._addBillFrequency(occurrence, String(bill.frequency ?? 'MONTHLY'), bill.dueDay);
+    }
+
+    while (occurrence < rangeEnd) {
+      if (occurrence >= startDate && (!endDate || occurrence <= endDate)) {
+        occurrences.push(occurrence);
+      }
+      occurrence = this._addBillFrequency(occurrence, String(bill.frequency ?? 'MONTHLY'), bill.dueDay);
+    }
+
+    return occurrences;
+  }
+
+  private _getPaymentsForOccurrence(payments: Array<{ dueDate: Date; paidAt: Date; amount: any; id: string }>, occurrenceDateIso: string) {
+    return payments.filter((payment) => this._toIsoDate(new Date(payment.dueDate)) === occurrenceDateIso);
+  }
+
+  private _applyTransitionTagToData(
+    data: Record<string, any>,
+    columns: { id: string; type?: string; tagGroupId?: string }[],
+    activeTag: any,
+    inactiveTag: any,
+  ) {
+    const tagGroupId = activeTag?.tagGroupId ?? inactiveTag?.tagGroupId;
+    if (!tagGroupId) return;
+
+    const targetColumn = columns.find((column) => column.type === 'tag_group' && column.tagGroupId === tagGroupId);
+    if (!targetColumn) return;
+
+    const existingNames = Array.isArray(data[targetColumn.id])
+      ? data[targetColumn.id].map((value: any) => String(value)).filter(Boolean)
+      : data[targetColumn.id]
+        ? [String(data[targetColumn.id])]
+        : [];
+
+    const nextNames = existingNames.filter((name: string) => name !== inactiveTag?.name);
+    if (activeTag?.name && !nextNames.includes(activeTag.name)) {
+      nextNames.push(activeTag.name);
+    }
+
+    if (nextNames.length > 0) {
+      data[targetColumn.id] = nextNames;
+    }
+  }
+
+  private async _resolveCurrentAutoExpenseContext(familyId: string) {
+    const template = await this.templateActions.findDefaultTemplate(familyId);
+    if (!template) return null;
+
+    const now = new Date();
+    const billingPeriod = (template.billingPeriod as IBillingPeriodConfig | null) ?? null;
+    if (billingPeriod?.type) {
+      const { periodStart, periodEnd } = calculatePeriodBoundaries(billingPeriod, now);
+      const override = await this.prisma.billingPeriodOverride.findUnique({
+        where: {
+          templateId_periodStart: {
+            templateId: template.id,
+            periodStart,
+          },
+        },
+      });
+
+      return {
+        template,
+        rangeStart: periodStart,
+        rangeEnd: override?.overrideResetDate ?? periodEnd,
+      };
+    }
+
+    return {
+      template,
+      rangeStart: new Date(now.getFullYear(), now.getMonth(), 1),
+      rangeEnd: new Date(now.getFullYear(), now.getMonth() + 1, 1),
+    };
+  }
+
+  private async _buildAutoExpenseData(
+    familyId: string,
     templateColumnsRaw: any,
     bill: any,
-    payment: { id: string },
-    input: PayBillDto,
-  ): Record<string, any> {
+    options: {
+      occurrenceDate: Date;
+      amount: number;
+      paid: boolean;
+      paymentId?: string | null;
+    },
+  ): Promise<Record<string, any>> {
     const columns = this._extractTemplateColumns(templateColumnsRaw);
+    const fieldConfigs = await this._loadBillFieldConfigs(familyId);
+    const hasConfig = Object.keys(fieldConfigs).length > 0;
+    const occurrenceDateIso = this._toIsoDate(options.occurrenceDate);
+
+    // Bill source values
+    const sourceValues: Record<string, any> = {
+      name: bill.name,
+      amount: { amount: options.amount, currency: (bill as any).currency ?? 'PLN' },
+      paymentDate: occurrenceDateIso,
+      notes: bill.notes ?? '',
+    };
+
+    // Metadata always included
     const data: Record<string, any> = {
-      col_date: new Date().toISOString().split('T')[0],
-      col_amount: { amount: input.amount, currency: (bill as any).currency ?? 'PLN' },
-      col_description: bill.name,
-      col_paid: true,
       _billId: bill.id,
-      _billPaymentId: payment.id,
-      _billPaymentDueDate: new Date(input.dueDate).toISOString().split('T')[0],
+      _billPaymentId: options.paymentId ?? null,
+      _billPaymentDueDate: occurrenceDateIso,
+      _billOccurrenceDate: occurrenceDateIso,
       _billName: bill.name,
     };
 
-    const tagGroupColumns = columns.filter((c) => c.type === 'tag_group' && typeof c.tagGroupId === 'string');
-    const billTags = Array.isArray((bill as any)?.tags) ? (bill as any).tags : [];
+    if (hasConfig) {
+      // Config-driven mapping
+      const autoTagIdPool = new Set<string>();
 
-    for (const column of tagGroupColumns) {
-      const selectedTagNames = billTags
-        .filter((bt: any) => bt?.tag?.tagGroupId === column.tagGroupId)
-        .map((bt: any) => bt?.tag?.name)
-        .filter((name: any) => typeof name === 'string');
+      for (const column of columns) {
+        const columnId = String(column.id);
+        const cfg = fieldConfigs[columnId];
+        if (!cfg || cfg.mode === 'none') continue;
 
-      data[column.id] = selectedTagNames;
+        if (cfg.mode === 'auto_tags' && column.type === 'tag_group') {
+          for (const tagId of cfg.autoTagIds ?? []) autoTagIdPool.add(tagId);
+          continue;
+        }
+
+        if (cfg.mode === 'select' && column.type === 'tag_group') {
+          // User-selected tag from the bill's tagIds – find matching tag for this group
+          const billTags = Array.isArray(bill.tags) ? bill.tags : [];
+          const names = billTags
+            .filter((bt: any) => bt?.tag?.tagGroupId === column.tagGroupId)
+            .map((bt: any) => bt?.tag?.name)
+            .filter(Boolean);
+          if (names.length > 0) data[columnId] = names;
+          continue;
+        }
+
+        if (cfg.mode === 'map' && cfg.sourceField) {
+          if (cfg.sourceField === 'tags') {
+            // Special: fill from bill tags for this tag_group column
+            const billTags = Array.isArray(bill.tags) ? bill.tags : [];
+            const names = billTags
+              .filter((bt: any) => !column.tagGroupId || bt?.tag?.tagGroupId === column.tagGroupId)
+              .map((bt: any) => bt?.tag?.name)
+              .filter(Boolean);
+            if (names.length > 0) data[columnId] = names;
+          } else {
+            const value = sourceValues[cfg.sourceField];
+            if (value != null) data[columnId] = value;
+          }
+        }
+      }
+
+      // Resolve auto_tags
+      if (autoTagIdPool.size > 0) {
+        const tagNameMap = await this._buildTagIdToNameMap(familyId, Array.from(autoTagIdPool));
+        for (const column of columns) {
+          const cfg = fieldConfigs[column.id];
+          if (!cfg || cfg.mode !== 'auto_tags' || column.type !== 'tag_group') continue;
+          const names = (cfg.autoTagIds ?? []).map((id: string) => tagNameMap[id]).filter(Boolean);
+          if (names.length > 0) data[column.id] = names;
+        }
+      }
+
+      // Always keep the payment state in sync with the bill occurrence.
+      const paidCol = columns.find((c: any) => c.type === 'checkbox' && /paid|oplac|zaplac|rozlicz/i.test(String(c.id ?? '') + ' ' + String(c.name ?? '')));
+      if (paidCol) data[paidCol.id] = options.paid;
+      else data.col_paid = options.paid;
+    } else {
+      // Legacy hardcoded mapping (backward compat)
+      data.col_date = occurrenceDateIso;
+      data.col_amount = sourceValues.amount;
+      data.col_description = bill.name;
+      data.col_paid = options.paid;
+
+      const tagGroupColumns = columns.filter((c) => c.type === 'tag_group' && typeof c.tagGroupId === 'string');
+      const billTags = Array.isArray(bill.tags) ? bill.tags : [];
+      for (const column of tagGroupColumns) {
+        const selectedTagNames = billTags
+          .filter((bt: any) => bt?.tag?.tagGroupId === column.tagGroupId)
+          .map((bt: any) => bt?.tag?.name)
+          .filter((name: any) => typeof name === 'string');
+        data[column.id] = selectedTagNames;
+      }
     }
+
+    this._applyTransitionTagToData(
+      data,
+      columns,
+      options.paid ? bill.tagAfterPayment : bill.tagBeforePayment,
+      options.paid ? bill.tagBeforePayment : bill.tagAfterPayment,
+    );
 
     return data;
   }
@@ -200,6 +436,8 @@ export class BillContextService {
       ...billWithoutCategory,
       amount: billAmount,
       budgetLimit: bill.budgetLimit ? Number(bill.budgetLimit) : null,
+      savingsGoalId: bill.savingsGoalId ?? null,
+      savingsGoal: bill.savingsGoal ? { id: bill.savingsGoal.id, name: bill.savingsGoal.name } : null,
       payments: bill.payments.map((p: any) => ({
         ...p,
         amount: Number(p.amount),
@@ -235,13 +473,22 @@ export class BillContextService {
       budgetLimit: input.budgetLimit,
       tagBeforePaymentId: input.tagBeforePaymentId,
       tagAfterPaymentId: input.tagAfterPaymentId,
+      savingsGoalId: input.savingsGoalId,
       tagIds: input.tagIds,
     });
+
+    if (bill.autoCreateExpense) {
+      try {
+        await this.syncAutoExpensesForCurrentPeriod(familyId);
+      } catch (error) {
+        console.error('Recurring expense sync after bill creation failed:', error);
+      }
+    }
 
     return this._mapBill(bill);
   }
 
-  async payBill(billId: string, familyId: string, input: PayBillDto) {
+  async payBill(billId: string, familyId: string, userId: string, input: PayBillDto) {
     const bill = await this.billActions.findBillById(billId, familyId);
 
     if (!bill) {
@@ -261,18 +508,60 @@ export class BillContextService {
         const defaultTemplate = await this.templateActions.findDefaultTemplate(familyId);
 
         if (defaultTemplate) {
-          const maxSort = await this.recordActions.getMaxSortOrder(defaultTemplate.id);
-          const autoExpenseData = this._buildAutoExpenseData(defaultTemplate.columns, bill, payment, input);
-
-          await this.recordActions.createRecord({
-            templateId: defaultTemplate.id,
-            data: autoExpenseData,
-            sortOrder: maxSort + 1,
+          const occurrenceDate = new Date(input.dueDate);
+          const occurrenceDateIso = this._toIsoDate(occurrenceDate);
+          const occurrencePayments = [
+            ...this._getPaymentsForOccurrence(bill.payments ?? [], occurrenceDateIso),
+            payment,
+          ];
+          const paidAmount = occurrencePayments.reduce((sum, currentPayment) => sum + Number(currentPayment.amount), 0);
+          const autoExpenseData = await this._buildAutoExpenseData(familyId, defaultTemplate.columns, bill, {
+            occurrenceDate,
+            amount: Number(bill.amount),
+            paid: paidAmount >= Number(bill.amount),
+            paymentId: payment.id,
           });
+          const existingRecord = await this.recordActions.findBillAutoExpenseRecordByOccurrence(
+            defaultTemplate.id,
+            bill.id,
+            occurrenceDateIso,
+          );
+
+          if (existingRecord) {
+            const existingData = (existingRecord.data as Record<string, any>) ?? {};
+            await this.recordActions.updateRecord(existingRecord.id, {
+              data: {
+                ...existingData,
+                ...autoExpenseData,
+              },
+            });
+          } else {
+            const maxSort = await this.recordActions.getMaxSortOrder(defaultTemplate.id);
+            await this.recordActions.createRecord({
+              templateId: defaultTemplate.id,
+              data: autoExpenseData,
+              sortOrder: maxSort + 1,
+            });
+          }
         }
       } catch (e) {
         // Don't fail the payment if auto-expense creation fails
         console.error('Auto-expense creation failed:', e);
+      }
+    }
+
+    // Auto-create savings deposit if bill is linked to a savings goal
+    if (bill.savingsGoalId) {
+      try {
+        await this.savingsActions.createDeposit({
+          goalId: bill.savingsGoalId,
+          userId,
+          amount: input.amount,
+          date: new Date(input.dueDate),
+          notes: `Cykliczny wydatek: ${bill.name}`,
+        });
+      } catch (e) {
+        console.error('Savings deposit creation from bill payment failed:', e);
       }
     }
 
@@ -318,6 +607,68 @@ export class BillContextService {
   async getBillStats(familyId: string) {
     return this.billActions.getBillStats(familyId);
   }
+
+  async syncAutoExpensesForCurrentPeriod(familyId: string) {
+    const context = await this._resolveCurrentAutoExpenseContext(familyId);
+    if (!context) {
+      return { created: 0, updated: 0 };
+    }
+
+    const bills = (await this.billActions.findBillsByFamily(familyId, true)).filter((bill: any) => bill.autoCreateExpense);
+    if (bills.length === 0) {
+      return { created: 0, updated: 0 };
+    }
+
+    let created = 0;
+    let updated = 0;
+    let nextSortOrder = await this.recordActions.getMaxSortOrder(context.template.id);
+
+    for (const bill of bills) {
+      const occurrences = this._getOccurrencesInRange(bill, context.rangeStart, context.rangeEnd);
+      for (const occurrenceDate of occurrences) {
+        const occurrenceDateIso = this._toIsoDate(occurrenceDate);
+        const occurrencePayments = this._getPaymentsForOccurrence(bill.payments ?? [], occurrenceDateIso);
+        const latestPayment = occurrencePayments[0] ?? null;
+        const paidAmount = occurrencePayments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+        const autoExpenseData = await this._buildAutoExpenseData(familyId, context.template.columns, bill, {
+          occurrenceDate,
+          amount: Number(bill.amount),
+          paid: occurrencePayments.length > 0 && paidAmount >= Number(bill.amount),
+          paymentId: latestPayment?.id ?? null,
+        });
+
+        const existingRecord = await this.recordActions.findBillAutoExpenseRecordByOccurrence(
+          context.template.id,
+          bill.id,
+          occurrenceDateIso,
+        );
+
+        if (existingRecord) {
+          const existingData = (existingRecord.data as Record<string, any>) ?? {};
+          const nextData = {
+            ...existingData,
+            ...autoExpenseData,
+          };
+
+          if (JSON.stringify(existingData) !== JSON.stringify(nextData)) {
+            await this.recordActions.updateRecord(existingRecord.id, { data: nextData });
+            updated += 1;
+          }
+          continue;
+        }
+
+        nextSortOrder += 1;
+        await this.recordActions.createRecord({
+          templateId: context.template.id,
+          data: autoExpenseData,
+          sortOrder: nextSortOrder,
+        });
+        created += 1;
+      }
+    }
+
+    return { created, updated };
+  }
   // #endregion
 
   // #region Update
@@ -350,7 +701,16 @@ export class BillContextService {
       budgetLimit: input.budgetLimit,
       tagBeforePaymentId: input.tagBeforePaymentId !== undefined ? input.tagBeforePaymentId || null : undefined,
       tagAfterPaymentId: input.tagAfterPaymentId !== undefined ? input.tagAfterPaymentId || null : undefined,
+      savingsGoalId: input.savingsGoalId !== undefined ? input.savingsGoalId || null : undefined,
     });
+
+    if ((bill as any).autoCreateExpense) {
+      try {
+        await this.syncAutoExpensesForCurrentPeriod(familyId);
+      } catch (error) {
+        console.error('Recurring expense sync after bill update failed:', error);
+      }
+    }
 
     return this._mapBill(bill);
   }
@@ -382,7 +742,57 @@ export class BillContextService {
       throw new NotFoundException('Payment not found');
     }
 
-    // Remove auto-created expense record linked to this bill payment (new linkage path).
+    const occurrenceDate = new Date(payment.dueDate);
+    const occurrenceDateIso = this._toIsoDate(occurrenceDate);
+
+    await this.billActions.deleteBillPayment(paymentId, billId);
+
+    if (bill.autoCreateExpense) {
+      try {
+        const defaultTemplate = await this.templateActions.findDefaultTemplate(familyId);
+        const refreshedBill = await this.billActions.findBillById(billId, familyId);
+
+        if (defaultTemplate && refreshedBill) {
+          const occurrencePayments = this._getPaymentsForOccurrence(refreshedBill.payments ?? [], occurrenceDateIso);
+          const latestPayment = occurrencePayments[0] ?? null;
+          const paidAmount = occurrencePayments.reduce((sum, currentPayment) => sum + Number(currentPayment.amount), 0);
+          const autoExpenseData = await this._buildAutoExpenseData(familyId, defaultTemplate.columns, refreshedBill, {
+            occurrenceDate,
+            amount: Number(refreshedBill.amount),
+            paid: occurrencePayments.length > 0 && paidAmount >= Number(refreshedBill.amount),
+            paymentId: latestPayment?.id ?? null,
+          });
+          const existingRecord = await this.recordActions.findBillAutoExpenseRecordByOccurrence(
+            defaultTemplate.id,
+            billId,
+            occurrenceDateIso,
+          );
+
+          if (existingRecord) {
+            const existingData = (existingRecord.data as Record<string, any>) ?? {};
+            await this.recordActions.updateRecord(existingRecord.id, {
+              data: {
+                ...existingData,
+                ...autoExpenseData,
+              },
+            });
+          } else {
+            const maxSort = await this.recordActions.getMaxSortOrder(defaultTemplate.id);
+            await this.recordActions.createRecord({
+              templateId: defaultTemplate.id,
+              data: autoExpenseData,
+              sortOrder: maxSort + 1,
+            });
+          }
+
+          return;
+        }
+      } catch (e) {
+        console.error('Bill auto-expense re-sync after deleting payment failed:', e);
+      }
+    }
+
+    // Remove legacy auto-created expense record linked to this payment.
     const removedByPaymentId = await this.recordActions.deleteAutoExpenseRecordsByBillPaymentId(
       familyId,
       paymentId,
@@ -402,8 +812,6 @@ export class BillContextService {
         await this.recordActions.deleteRecord(fallbackCandidates[0].id);
       }
     }
-
-    await this.billActions.deleteBillPayment(paymentId, billId);
 
     return;
   }

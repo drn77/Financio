@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, IsOptional, IsDateString, IsArray, ValidateNested, IsBoolean, IsIn } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, IsOptional, IsDateString, IsArray, ValidateNested, IsBoolean, IsIn, IsObject } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class ReceiptItemDto {
@@ -59,6 +59,10 @@ export class CreateReceiptDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsOptional()
+  @IsObject()
+  configurableFields?: Record<string, unknown>;
 
   @IsOptional()
   @IsArray()

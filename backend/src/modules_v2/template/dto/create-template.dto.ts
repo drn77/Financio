@@ -81,4 +81,7 @@ export class CreateTemplateDto {
   @IsOptional()
   @IsBoolean()
   isDefault?: boolean;
+
+  @IsOptional()
+  billingPeriod?: Record<string, any>;
 }

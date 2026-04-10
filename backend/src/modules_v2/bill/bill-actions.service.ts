@@ -11,6 +11,7 @@ export class BillActionsService {
     tags: { include: { tag: { include: { tagGroup: true } } } },
     tagBeforePayment: { include: { tagGroup: true } },
     tagAfterPayment: { include: { tagGroup: true } },
+    savingsGoal: true,
   };
   // #endregion
 
@@ -31,6 +32,7 @@ export class BillActionsService {
     budgetLimit?: number;
     tagBeforePaymentId?: string;
     tagAfterPaymentId?: string;
+    savingsGoalId?: string;
     tagIds?: string[];
   }) {
     return this.prisma.bill.create({
@@ -53,6 +55,9 @@ export class BillActionsService {
           : undefined,
         tagAfterPayment: input.tagAfterPaymentId
           ? { connect: { id: input.tagAfterPaymentId } }
+          : undefined,
+        savingsGoal: input.savingsGoalId
+          ? { connect: { id: input.savingsGoalId } }
           : undefined,
         tags: input.tagIds?.length
           ? { create: input.tagIds.map((tagId) => ({ tag: { connect: { id: tagId } } })) }
@@ -143,6 +148,7 @@ export class BillActionsService {
     budgetLimit?: number;
     tagBeforePaymentId?: string | null;
     tagAfterPaymentId?: string | null;
+    savingsGoalId?: string | null;
   }) {
     const data: any = {};
 
@@ -167,6 +173,11 @@ export class BillActionsService {
     if (input.tagAfterPaymentId !== undefined) {
       data.tagAfterPayment = input.tagAfterPaymentId
         ? { connect: { id: input.tagAfterPaymentId } }
+        : { disconnect: true };
+    }
+    if (input.savingsGoalId !== undefined) {
+      data.savingsGoal = input.savingsGoalId
+        ? { connect: { id: input.savingsGoalId } }
         : { disconnect: true };
     }
 

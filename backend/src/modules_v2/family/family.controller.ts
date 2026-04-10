@@ -41,4 +41,18 @@ export class FamilyController {
   async updateTagMappings(@FamilyId() familyId: string, @Body() input: UpdateTagMappingsDto) {
     return this.familyContext.updateTagMappings(familyId, input);
   }
+
+  @Get('expense-mappings')
+  async getExpenseMappings(@FamilyId() familyId: string) {
+    return this.familyContext.getExpenseMappings(familyId);
+  }
+
+  @Put('expense-mappings/:sourceType')
+  async updateExpenseMappings(
+    @FamilyId() familyId: string,
+    @Param('sourceType') sourceType: string,
+    @Body() body: { fieldConfigs: Record<string, any> },
+  ) {
+    return this.familyContext.updateExpenseMappings(familyId, sourceType, body.fieldConfigs);
+  }
 }

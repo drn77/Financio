@@ -24,6 +24,7 @@ import {
   CalendarDays,
   Calculator,
   KanbanSquare,
+  Banknote,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -51,6 +52,7 @@ const mainNav: NavItem[] = [
   { href: '/kanban', label: 'Kanban', icon: KanbanSquare },
   { href: '/statistics', label: 'Statystyki', icon: BarChart3 },
   { href: '/taxes', label: 'Podatki', icon: Calculator },
+  { href: '/invoices', label: 'Przychody', icon: Banknote },
 ];
 
 const bottomNav: NavItem[] = [
