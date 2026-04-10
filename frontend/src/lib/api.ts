@@ -1,5 +1,5 @@
 import type { ILoginRequest, IRegisterRequest, IUser, ISessionResponse } from '@shared/auth';
-import type { IBill, IBillPayment, IBillStats, IRecordStats, IReceipt, IReceiptStats, IStore, IBudget, IEvent, IEventItem, IEventTodo, IEventNote, IEventExpense, IEventStats, ISplit, ISplitPreview, ISplitMessage, ISplitSummary, IJoinSplitResult } from '@shared/models';
+import type { IBill, IBillPayment, IBillStats, IRecordStats, IReceipt, IReceiptStats, IStore, IBudget, IEvent, IEventItem, IEventTodo, IEventNote, IEventExpense, IEventStats, ISavingsGoal, ISplit, ISplitPreview, ISplitMessage, ISplitSummary, IJoinSplitResult } from '@shared/models';
 import { toastError, toastSuccess } from './toast';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
@@ -666,7 +666,7 @@ class ApiClient {
   }
 
   // ─── Savings ──────────────────────────────────────
-  async getSavingsGoals(): Promise<AnyRecord[]> {
+  async getSavingsGoals(): Promise<ISavingsGoal[]> {
     return this._request('/api/v2/savings/goals');
   }
 
