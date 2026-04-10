@@ -10,7 +10,7 @@ primary_region = 'ams'
   dockerfile = 'Dockerfile'
 
 [deploy]
-  release_command = "sh -lc 'for i in 1 2 3; do npx prisma migrate deploy && exit 0; echo release_command retry $i; sleep 5; done; exit 1'"
+  release_command = "sh -lc 'for i in 1 2 3; do DATABASE_URL=${MIGRATE_DATABASE_URL:-$DATABASE_URL} npx prisma migrate deploy && exit 0; echo release_command retry $i; sleep 5; done; exit 1'"
 
 [env]
   BACKEND_PORT = '8080'
