@@ -229,10 +229,11 @@ class ApiClient {
     await this._request(`/api/v2/templates/${templateId}/records/${recordId}`, { method: 'DELETE' });
   }
 
-  async bulkUpdateRecords(templateId: string, records: AnyRecord[], deletedIds?: string[]): Promise<AnyRecord[]> {
+  async bulkUpdateRecords(templateId: string, records: AnyRecord[], deletedIds?: string[], signal?: AbortSignal): Promise<AnyRecord[]> {
     return this._request(`/api/v2/templates/${templateId}/records/bulk`, {
       method: 'PUT',
       body: JSON.stringify({ records, deletedIds }),
+      signal,
     });
   }
 

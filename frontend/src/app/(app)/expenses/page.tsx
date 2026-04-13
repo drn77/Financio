@@ -163,6 +163,7 @@ export default function ExpensesPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<{ rowIndex: number } | null>(null);
   const hasUnsaved = useRef(false);
   const saveInFlightRef = useRef(false);
+  const saveAbortRef = useRef<AbortController | null>(null);
   const deletedIdsRef = useRef<string[]>([]);
   const allRecordsRef = useRef<RecordRow[]>([]);
   const templateIdRef = useRef<string | null>(null);
@@ -188,6 +189,12 @@ export default function ExpensesPage() {
   }, []);
 
   const flushPendingChanges = useCallback(async (mode: 'normal' | 'keepalive' = 'normal') => {
+    // If a save is in flight, abort it first so the keepalive replaces it
+    // rather than racing (which would create duplicate new rows).
+    if (saveInFlightRef.current && mode === 'keepalive') {
+      saveAbortRef.current?.abort();
+      saveInFlightRef.current = false;
+    }
     if (!hasUnsaved.current && !saveInFlightRef.current) return;
 
     const templateId = templateIdRef.current;
@@ -562,7 +569,10 @@ export default function ExpensesPage() {
       }));
 
       // The endpoint returns the full record list (with server-generated IDs).
-      const serverRecords: any[] = await api.bulkUpdateRecords(template.id, toSend, deletedIds);
+      const abortCtrl = new AbortController();
+      saveAbortRef.current = abortCtrl;
+      const serverRecords: any[] = await api.bulkUpdateRecords(template.id, toSend, deletedIds, abortCtrl.signal);
+      saveAbortRef.current = null;
       saveInFlightRef.current = false;
 
       // Strip _clientNonce from server response data to prevent DB pollution.
@@ -609,8 +619,15 @@ export default function ExpensesPage() {
       if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
       savedTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
     } catch (e) {
-      // Restore the unsaved flag so the next attempt includes these changes.
+      saveAbortRef.current = null;
       saveInFlightRef.current = false;
+      // If the request was aborted (e.g. by keepalive flush on unload),
+      // the keepalive already sent the data — don't restore unsaved flag.
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        setSaveStatus('idle');
+        return;
+      }
+      // Restore the unsaved flag so the next attempt includes these changes.
       hasUnsaved.current = true;
       deletedIdsRef.current = [...deletedIds, ...deletedIdsRef.current];
       console.error('Save failed:', e);
