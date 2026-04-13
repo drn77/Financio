@@ -100,6 +100,8 @@ interface RecordRow {
   createdAt?: string;
   isNew?: boolean;
   isDirty?: boolean;
+  /** Temporary client-side identifier used to match new rows with server responses after save. */
+  _clientNonce?: string;
 }
 
 type SortDir = 'asc' | 'desc' | null;
@@ -459,6 +461,7 @@ export default function ExpensesPage() {
       createdAt: new Date().toISOString(),
       isNew: true,
       isDirty: true,
+      _clientNonce: crypto.randomUUID(),
     }, ...prev]);
     hasUnsaved.current = true;
     setPage(1);
@@ -506,6 +509,7 @@ export default function ExpensesPage() {
           createdAt: new Date().toISOString(),
           isNew: true,
           isDirty: true,
+          _clientNonce: crypto.randomUUID(),
         }, ...prev];
       });
       hasUnsaved.current = true;
@@ -543,9 +547,15 @@ export default function ExpensesPage() {
     deletedIdsRef.current = [];
 
     try {
+      // Tag each id-less row with its client nonce so we can match server
+      // responses back to the correct local row after the save.
+      const sentNonces = new Set(
+        currentRecords.filter((r) => !r.id && r._clientNonce).map((r) => r._clientNonce as string),
+      );
+
       const toSend = currentRecords.map((r, i) => ({
         id: r.id,
-        data: r.data,
+        data: r.id ? r.data : { ...r.data, _clientNonce: r._clientNonce },
         sortOrder: i,
       }));
 
@@ -565,17 +575,24 @@ export default function ExpensesPage() {
           );
         }
 
-        // Concurrent edits happened — only assign IDs to new (id-less) rows.
-        const knownIds = new Set(localRecords.filter((r) => r.id).map((r) => r.id));
-        const newServerRows = serverRecords.filter((sr: any) => !knownIds.has(sr.id));
-        let idx = 0;
+        // Concurrent edits happened — match by client nonce to assign the
+        // correct server ID to each row that was part of this save.
+        const serverByNonce = new Map<string, any>();
+        for (const sr of serverRecords) {
+          const nonce = sr.data?._clientNonce;
+          if (nonce) serverByNonce.set(nonce, sr);
+        }
+
         return localRecords.map((r) => {
           if (r.id) return r; // existing row — keep local (possibly dirty) data
-          if (idx < newServerRows.length) {
-            const sr = newServerRows[idx++];
-            return { ...r, id: sr.id, createdAt: sr.createdAt, isNew: false };
+          const nonce = r._clientNonce as string | undefined;
+          if (nonce && sentNonces.has(nonce)) {
+            const sr = serverByNonce.get(nonce);
+            if (sr) {
+              return { ...r, id: sr.id, createdAt: sr.createdAt, isNew: false, _clientNonce: undefined };
+            }
           }
-          return r;
+          return r; // row added concurrently — leave as-is for next save
         });
       });
 
@@ -586,6 +603,7 @@ export default function ExpensesPage() {
     } catch (e) {
       // Restore the unsaved flag so the next attempt includes these changes.
       hasUnsaved.current = true;
+      deletedIdsRef.current = [...deletedIds, ...deletedIdsRef.current];
       console.error('Save failed:', e);
       setSaveStatus('idle');
     }
