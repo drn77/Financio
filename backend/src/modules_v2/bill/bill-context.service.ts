@@ -645,6 +645,12 @@ export class BillContextService {
 
         if (existingRecord) {
           const existingData = (existingRecord.data as Record<string, any>) ?? {};
+
+          // The user intentionally deleted this auto-expense — respect the deletion.
+          if (existingData._autoExpenseDeleted) {
+            continue;
+          }
+
           const nextData = {
             ...existingData,
             ...autoExpenseData,
