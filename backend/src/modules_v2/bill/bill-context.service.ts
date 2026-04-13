@@ -292,7 +292,7 @@ export class BillContextService {
 
   private _computeNextDueDate(dueDay: number, frequency: string): Date {
     const now = new Date();
-    const currentMonth = new Date(now.getFullYear(), now.getMonth(), dueDay);
+    const currentMonth = this._clampDay(now.getFullYear(), now.getMonth(), dueDay);
 
     if (currentMonth >= now) {
       return currentMonth;
@@ -300,11 +300,11 @@ export class BillContextService {
 
     switch (frequency) {
       case 'QUARTERLY':
-        return new Date(now.getFullYear(), now.getMonth() + 3, dueDay);
+        return this._clampDay(now.getFullYear(), now.getMonth() + 3, dueDay);
       case 'YEARLY':
-        return new Date(now.getFullYear() + 1, now.getMonth(), dueDay);
+        return this._clampDay(now.getFullYear() + 1, now.getMonth(), dueDay);
       default:
-        return new Date(now.getFullYear(), now.getMonth() + 1, dueDay);
+        return this._clampDay(now.getFullYear(), now.getMonth() + 1, dueDay);
     }
   }
 
@@ -322,7 +322,7 @@ export class BillContextService {
     if (paidAmount >= billAmount) return 'PAID';
 
     const now = new Date();
-    const dueDate = new Date(now.getFullYear(), now.getMonth(), dueDay);
+    const dueDate = this._clampDay(now.getFullYear(), now.getMonth(), dueDay);
     const daysUntilDue = Math.ceil((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
 
     if (paidAmount > 0) return 'PARTIALLY_PAID';
@@ -337,17 +337,17 @@ export class BillContextService {
   }
 
   private _computeReferenceDueDate(dueDay: number, startDate: Date, now: Date): Date {
-    const dueInCurrentMonth = new Date(now.getFullYear(), now.getMonth(), dueDay);
+    const dueInCurrentMonth = this._clampDay(now.getFullYear(), now.getMonth(), dueDay);
     if (this._normalizeDate(dueInCurrentMonth) >= this._normalizeDate(startDate)) {
       return dueInCurrentMonth;
     }
 
-    const startMonthDue = new Date(startDate.getFullYear(), startDate.getMonth(), dueDay);
+    const startMonthDue = this._clampDay(startDate.getFullYear(), startDate.getMonth(), dueDay);
     if (this._normalizeDate(startMonthDue) >= this._normalizeDate(startDate)) {
       return startMonthDue;
     }
 
-    return new Date(startDate.getFullYear(), startDate.getMonth() + 1, dueDay);
+    return this._clampDay(startDate.getFullYear(), startDate.getMonth() + 1, dueDay);
   }
 
   private _mapTag(tag: any) {
