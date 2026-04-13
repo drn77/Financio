@@ -116,11 +116,15 @@ export class SplitGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const conn = this.connections.get(client.id);
     if (!conn) return;
 
-    const message = await this.splitContext.sendMessage(conn.splitId, conn.participantId, {
-      content: data.content,
-    });
+    try {
+      const message = await this.splitContext.sendMessage(conn.splitId, conn.participantId, {
+        content: data.content,
+      });
 
-    this.server.to(`split:${conn.splitId}`).emit('split:message', message);
+      this.server.to(`split:${conn.splitId}`).emit('split:message', message);
+    } catch (e: any) {
+      client.emit('split:error', { message: e.message || 'Failed to send message' });
+    }
   }
 
   // ─── Item claims ──────────────────────────────────
