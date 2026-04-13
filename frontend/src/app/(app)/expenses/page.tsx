@@ -181,7 +181,7 @@ export default function ExpensesPage() {
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current = setTimeout(() => {
       saveAllRef.current();
-    }, 500);
+    }, 20_000);
   }, []);
 
   const flushPendingChanges = useCallback(async (mode: 'normal' | 'keepalive' = 'normal') => {
@@ -475,7 +475,8 @@ export default function ExpensesPage() {
       return copy;
     });
     hasUnsaved.current = true;
-  }, []);
+    triggerAutoSave();
+  }, [triggerAutoSave]);
 
   const removeRow = useCallback((globalIndex: number) => {
     setAllRecords((prev) => {
@@ -530,35 +531,65 @@ export default function ExpensesPage() {
   const saveAll = useCallback(async () => {
     if (!template || !hasUnsaved.current) return;
     setSaveStatus('saving');
+
+    // Snapshot the latest state from refs so we always send the most
+    // up-to-date data, even if React hasn't re-rendered yet.
+    const currentRecords = allRecordsRef.current;
+    const deletedIds = [...deletedIdsRef.current];
+
+    // Optimistically mark as saved. If the user edits another cell while
+    // the request is in flight, updateCell / removeRow will flip it back.
+    hasUnsaved.current = false;
+    deletedIdsRef.current = [];
+
     try {
-      const toSend = allRecords.map((r, i) => ({
+      const toSend = currentRecords.map((r, i) => ({
         id: r.id,
         data: r.data,
         sortOrder: i,
       }));
-      const deletedIds = deletedIdsRef.current;
 
-      await api.bulkUpdateRecords(template.id, toSend, deletedIds);
-      hasUnsaved.current = false;
-      deletedIdsRef.current = [];
+      // The endpoint returns the full record list (with server-generated IDs).
+      const serverRecords: any[] = await api.bulkUpdateRecords(template.id, toSend, deletedIds);
 
-      const result = await api.getRecords(template.id, 1, 500);
-      setAllRecords(sortRecordsByCreatedAtDesc(
-        (result.records ?? []).map((r: any) => ({
-          id: r.id,
-          data: r.data,
-          createdAt: r.createdAt,
-        })),
-      ));
+      // Merge server data with local state:
+      // - If no new edits arrived during the save, use the server snapshot
+      //   (assigns IDs to new records, reflects any server-side changes).
+      // - If the user edited while we were saving, keep the local data for
+      //   dirty records and only patch IDs onto new rows.
+      setAllRecords((localRecords) => {
+        if (!hasUnsaved.current) {
+          // No concurrent edits — safe to accept server state.
+          return sortRecordsByCreatedAtDesc(
+            serverRecords.map((r: any) => ({ id: r.id, data: r.data, createdAt: r.createdAt })),
+          );
+        }
+
+        // Concurrent edits happened — only assign IDs to new (id-less) rows.
+        const knownIds = new Set(localRecords.filter((r) => r.id).map((r) => r.id));
+        const newServerRows = serverRecords.filter((sr: any) => !knownIds.has(sr.id));
+        let idx = 0;
+        return localRecords.map((r) => {
+          if (r.id) return r; // existing row — keep local (possibly dirty) data
+          if (idx < newServerRows.length) {
+            const sr = newServerRows[idx++];
+            return { ...r, id: sr.id, createdAt: sr.createdAt, isNew: false };
+          }
+          return r;
+        });
+      });
+
       window.dispatchEvent(new Event('financio:summary-refresh'));
       setSaveStatus('saved');
       if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
       savedTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
     } catch (e) {
+      // Restore the unsaved flag so the next attempt includes these changes.
+      hasUnsaved.current = true;
       console.error('Save failed:', e);
       setSaveStatus('idle');
     }
-  }, [allRecords, template]);
+  }, [template]);
   saveAllRef.current = saveAll;
 
   const exportCSV = useCallback(() => {
