@@ -157,7 +157,15 @@ export class RecordContextService {
 
     const maxSort = await this.recordActions.getMaxSortOrder(templateId);
 
-    const newData = { ...(record.data as Record<string, any>) };
+    const {
+      _billId: _b1,
+      _billOccurrenceDate: _b2,
+      _billPaymentId: _b3,
+      _billPaymentDueDate: _b4,
+      _billName: _b5,
+      _autoExpenseDeleted: _b6,
+      ...newData
+    } = record.data as Record<string, any>;
     if (newData.col_date) {
       newData.col_date = new Date().toISOString().split('T')[0];
     }
