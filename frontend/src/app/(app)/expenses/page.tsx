@@ -336,11 +336,12 @@ export default function ExpensesPage() {
       }
 
       const result = await api.getRecords(tmpl.id, 1, 500);
-      const rows: RecordRow[] = (result.records ?? []).map((r: any) => ({
-        id: r.id,
-        data: r.data,
-        createdAt: r.createdAt,
-      }));
+      const rows: RecordRow[] = (result.records ?? []).map((r: any) => {
+        // Strip transient _clientNonce that may still be in the DB for
+        // recently-created rows (cleaned on next save).
+        const { _clientNonce: _, ...cleanData } = r.data ?? {};
+        return { id: r.id, data: cleanData, createdAt: r.createdAt };
+      });
       setAllRecords(sortRecordsByCreatedAtDesc(rows));
     } catch (e) {
       console.error('Failed to load expenses:', e);
