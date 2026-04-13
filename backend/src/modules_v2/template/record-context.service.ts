@@ -151,13 +151,21 @@ export class RecordContextService {
     }
 
     const record = await this.recordActions.findRecordById(recordId, templateId);
-    if (!record) {
+    if (!record || (record.data as Record<string, any>)?._autoExpenseDeleted) {
       throw new NotFoundException('Record not found');
     }
 
     const maxSort = await this.recordActions.getMaxSortOrder(templateId);
 
-    const newData = { ...(record.data as Record<string, any>) };
+    const {
+      _billId: _b1,
+      _billOccurrenceDate: _b2,
+      _billPaymentId: _b3,
+      _billPaymentDueDate: _b4,
+      _billName: _b5,
+      _autoExpenseDeleted: _b6,
+      ...newData
+    } = record.data as Record<string, any>;
     if (newData.col_date) {
       newData.col_date = new Date().toISOString().split('T')[0];
     }
@@ -205,7 +213,7 @@ export class RecordContextService {
     }
 
     const record = await this.recordActions.findRecordById(recordId, templateId);
-    if (!record) {
+    if (!record || (record.data as Record<string, any>)?._autoExpenseDeleted) {
       throw new NotFoundException('Record not found');
     }
 
@@ -245,7 +253,15 @@ export class RecordContextService {
       throw new NotFoundException('Record not found');
     }
 
-    await this.recordActions.deleteRecord(recordId);
+    const recordData = (record.data as Record<string, any>) ?? {};
+    if (recordData._billId) {
+      // Soft-delete: mark as deleted so sync doesn't recreate it.
+      await this.recordActions.updateRecord(recordId, {
+        data: { ...recordData, _autoExpenseDeleted: true },
+      });
+    } else {
+      await this.recordActions.deleteRecord(recordId);
+    }
   }
   // #endregion
 }

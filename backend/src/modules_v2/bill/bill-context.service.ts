@@ -529,9 +529,11 @@ export class BillContextService {
 
           if (existingRecord) {
             const existingData = (existingRecord.data as Record<string, any>) ?? {};
+            // User is actively paying — resurrect the record if it was soft-deleted.
+            const { _autoExpenseDeleted: _, ...cleanData } = existingData;
             await this.recordActions.updateRecord(existingRecord.id, {
               data: {
-                ...existingData,
+                ...cleanData,
                 ...autoExpenseData,
               },
             });
@@ -645,6 +647,12 @@ export class BillContextService {
 
         if (existingRecord) {
           const existingData = (existingRecord.data as Record<string, any>) ?? {};
+
+          // The user intentionally deleted this auto-expense — respect the deletion.
+          if (existingData._autoExpenseDeleted) {
+            continue;
+          }
+
           const nextData = {
             ...existingData,
             ...autoExpenseData,
@@ -770,12 +778,16 @@ export class BillContextService {
 
           if (existingRecord) {
             const existingData = (existingRecord.data as Record<string, any>) ?? {};
-            await this.recordActions.updateRecord(existingRecord.id, {
-              data: {
-                ...existingData,
-                ...autoExpenseData,
-              },
-            });
+
+            // Record was soft-deleted by the user — don't update the hidden tombstone.
+            if (!existingData._autoExpenseDeleted) {
+              await this.recordActions.updateRecord(existingRecord.id, {
+                data: {
+                  ...existingData,
+                  ...autoExpenseData,
+                },
+              });
+            }
           } else {
             const maxSort = await this.recordActions.getMaxSortOrder(defaultTemplate.id);
             await this.recordActions.createRecord({
