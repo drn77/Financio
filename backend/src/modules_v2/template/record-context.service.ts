@@ -151,7 +151,7 @@ export class RecordContextService {
     }
 
     const record = await this.recordActions.findRecordById(recordId, templateId);
-    if (!record) {
+    if (!record || (record.data as Record<string, any>)?._autoExpenseDeleted) {
       throw new NotFoundException('Record not found');
     }
 
@@ -205,7 +205,7 @@ export class RecordContextService {
     }
 
     const record = await this.recordActions.findRecordById(recordId, templateId);
-    if (!record) {
+    if (!record || (record.data as Record<string, any>)?._autoExpenseDeleted) {
       throw new NotFoundException('Record not found');
     }
 
