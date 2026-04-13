@@ -194,8 +194,9 @@ export default function ExpensesPage() {
     if (saveInFlightRef.current && mode === 'keepalive') {
       saveAbortRef.current?.abort();
       saveInFlightRef.current = false;
+    } else if (!hasUnsaved.current && !saveInFlightRef.current) {
+      return;
     }
-    if (!hasUnsaved.current && !saveInFlightRef.current) return;
 
     const templateId = templateIdRef.current;
     if (!templateId) return;
