@@ -190,17 +190,22 @@ export class DashboardContextService {
   }
 
   // #region Private
+  private _clampDay(year: number, month: number, day: number): Date {
+    const maxDay = new Date(year, month + 1, 0).getDate();
+    return new Date(year, month, Math.min(Math.max(day, 1), maxDay));
+  }
+
   private _computeNextDueDate(dueDay: number, startDate?: Date | null, endDate?: Date | null): Date {
     const now = new Date();
     const reference = startDate && startDate > now ? startDate : now;
-    const currentMonth = new Date(reference.getFullYear(), reference.getMonth(), dueDay);
+    const currentMonth = this._clampDay(reference.getFullYear(), reference.getMonth(), dueDay);
 
     if (currentMonth >= reference) {
       if (endDate && currentMonth > endDate) return endDate;
       return currentMonth;
     }
 
-    const nextMonth = new Date(reference.getFullYear(), reference.getMonth() + 1, dueDay);
+    const nextMonth = this._clampDay(reference.getFullYear(), reference.getMonth() + 1, dueDay);
     if (endDate && nextMonth > endDate) return endDate;
     return nextMonth;
   }
@@ -230,7 +235,7 @@ export class DashboardContextService {
     if (paidAmount >= billAmount) return 'PAID';
 
     const now = new Date();
-    const dueDate = new Date(now.getFullYear(), now.getMonth(), dueDay);
+    const dueDate = this._clampDay(now.getFullYear(), now.getMonth(), dueDay);
     const daysUntilDue = Math.ceil((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
 
     if (paidAmount > 0) return 'PARTIALLY_PAID';

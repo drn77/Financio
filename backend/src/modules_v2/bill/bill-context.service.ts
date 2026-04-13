@@ -292,7 +292,7 @@ export class BillContextService {
 
   private _computeNextDueDate(dueDay: number, frequency: string): Date {
     const now = new Date();
-    const currentMonth = new Date(now.getFullYear(), now.getMonth(), dueDay);
+    const currentMonth = this._clampDay(now.getFullYear(), now.getMonth(), dueDay);
 
     if (currentMonth >= now) {
       return currentMonth;
@@ -300,11 +300,11 @@ export class BillContextService {
 
     switch (frequency) {
       case 'QUARTERLY':
-        return new Date(now.getFullYear(), now.getMonth() + 3, dueDay);
+        return this._clampDay(now.getFullYear(), now.getMonth() + 3, dueDay);
       case 'YEARLY':
-        return new Date(now.getFullYear() + 1, now.getMonth(), dueDay);
+        return this._clampDay(now.getFullYear() + 1, now.getMonth(), dueDay);
       default:
-        return new Date(now.getFullYear(), now.getMonth() + 1, dueDay);
+        return this._clampDay(now.getFullYear(), now.getMonth() + 1, dueDay);
     }
   }
 
@@ -322,7 +322,7 @@ export class BillContextService {
     if (paidAmount >= billAmount) return 'PAID';
 
     const now = new Date();
-    const dueDate = new Date(now.getFullYear(), now.getMonth(), dueDay);
+    const dueDate = this._clampDay(now.getFullYear(), now.getMonth(), dueDay);
     const daysUntilDue = Math.ceil((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
 
     if (paidAmount > 0) return 'PARTIALLY_PAID';
@@ -337,17 +337,17 @@ export class BillContextService {
   }
 
   private _computeReferenceDueDate(dueDay: number, startDate: Date, now: Date): Date {
-    const dueInCurrentMonth = new Date(now.getFullYear(), now.getMonth(), dueDay);
+    const dueInCurrentMonth = this._clampDay(now.getFullYear(), now.getMonth(), dueDay);
     if (this._normalizeDate(dueInCurrentMonth) >= this._normalizeDate(startDate)) {
       return dueInCurrentMonth;
     }
 
-    const startMonthDue = new Date(startDate.getFullYear(), startDate.getMonth(), dueDay);
+    const startMonthDue = this._clampDay(startDate.getFullYear(), startDate.getMonth(), dueDay);
     if (this._normalizeDate(startMonthDue) >= this._normalizeDate(startDate)) {
       return startMonthDue;
     }
 
-    return new Date(startDate.getFullYear(), startDate.getMonth() + 1, dueDay);
+    return this._clampDay(startDate.getFullYear(), startDate.getMonth() + 1, dueDay);
   }
 
   private _mapTag(tag: any) {
@@ -430,7 +430,7 @@ export class BillContextService {
 
     const status = !inPaymentWindow
       ? 'UPCOMING'
-      : this._computeStatus(referenceDueDate.getDate(), paidAmount, billAmount);
+      : this._computeStatus(bill.dueDay, paidAmount, billAmount);
 
     return {
       ...billWithoutCategory,
@@ -445,7 +445,7 @@ export class BillContextService {
       tags: mappedTags,
       tagBeforePayment: this._mapTag(bill.tagBeforePayment),
       tagAfterPayment: this._mapTag(bill.tagAfterPayment),
-      nextDueDate: this._computeNextDueDate(referenceDueDate.getDate(), bill.frequency),
+      nextDueDate: this._computeNextDueDate(bill.dueDay, bill.frequency),
       isPaidThisMonth,
       paidAmount: Math.round(paidAmount * 100) / 100,
       remainingAmount: Math.round(Math.max(billAmount - paidAmount, 0) * 100) / 100,
@@ -529,9 +529,11 @@ export class BillContextService {
 
           if (existingRecord) {
             const existingData = (existingRecord.data as Record<string, any>) ?? {};
+            // User is actively paying — resurrect the record if it was soft-deleted.
+            const { _autoExpenseDeleted: _, ...cleanData } = existingData;
             await this.recordActions.updateRecord(existingRecord.id, {
               data: {
-                ...existingData,
+                ...cleanData,
                 ...autoExpenseData,
               },
             });
@@ -645,6 +647,12 @@ export class BillContextService {
 
         if (existingRecord) {
           const existingData = (existingRecord.data as Record<string, any>) ?? {};
+
+          // The user intentionally deleted this auto-expense — respect the deletion.
+          if (existingData._autoExpenseDeleted) {
+            continue;
+          }
+
           const nextData = {
             ...existingData,
             ...autoExpenseData,
@@ -770,12 +778,16 @@ export class BillContextService {
 
           if (existingRecord) {
             const existingData = (existingRecord.data as Record<string, any>) ?? {};
-            await this.recordActions.updateRecord(existingRecord.id, {
-              data: {
-                ...existingData,
-                ...autoExpenseData,
-              },
-            });
+
+            // Record was soft-deleted by the user — don't update the hidden tombstone.
+            if (!existingData._autoExpenseDeleted) {
+              await this.recordActions.updateRecord(existingRecord.id, {
+                data: {
+                  ...existingData,
+                  ...autoExpenseData,
+                },
+              });
+            }
           } else {
             const maxSort = await this.recordActions.getMaxSortOrder(defaultTemplate.id);
             await this.recordActions.createRecord({
