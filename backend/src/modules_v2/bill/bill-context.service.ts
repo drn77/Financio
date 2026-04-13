@@ -430,7 +430,7 @@ export class BillContextService {
 
     const status = !inPaymentWindow
       ? 'UPCOMING'
-      : this._computeStatus(referenceDueDate.getDate(), paidAmount, billAmount);
+      : this._computeStatus(bill.dueDay, paidAmount, billAmount);
 
     return {
       ...billWithoutCategory,
@@ -445,7 +445,7 @@ export class BillContextService {
       tags: mappedTags,
       tagBeforePayment: this._mapTag(bill.tagBeforePayment),
       tagAfterPayment: this._mapTag(bill.tagAfterPayment),
-      nextDueDate: this._computeNextDueDate(referenceDueDate.getDate(), bill.frequency),
+      nextDueDate: this._computeNextDueDate(bill.dueDay, bill.frequency),
       isPaidThisMonth,
       paidAmount: Math.round(paidAmount * 100) / 100,
       remainingAmount: Math.round(Math.max(billAmount - paidAmount, 0) * 100) / 100,
