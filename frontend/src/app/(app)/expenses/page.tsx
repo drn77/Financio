@@ -162,6 +162,7 @@ export default function ExpensesPage() {
   const [csvImportOpen, setCSVImportOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<{ rowIndex: number } | null>(null);
   const hasUnsaved = useRef(false);
+  const saveInFlightRef = useRef(false);
   const deletedIdsRef = useRef<string[]>([]);
   const allRecordsRef = useRef<RecordRow[]>([]);
   const templateIdRef = useRef<string | null>(null);
@@ -187,7 +188,7 @@ export default function ExpensesPage() {
   }, []);
 
   const flushPendingChanges = useCallback(async (mode: 'normal' | 'keepalive' = 'normal') => {
-    if (!hasUnsaved.current) return;
+    if (!hasUnsaved.current && !saveInFlightRef.current) return;
 
     const templateId = templateIdRef.current;
     if (!templateId) return;
@@ -236,7 +237,7 @@ export default function ExpensesPage() {
     };
 
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (!hasUnsaved.current) return;
+      if (!hasUnsaved.current && !saveInFlightRef.current) return;
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
       void flushPendingChanges('keepalive');
       event.preventDefault();
@@ -545,6 +546,7 @@ export default function ExpensesPage() {
     // the request is in flight, updateCell / removeRow will flip it back.
     hasUnsaved.current = false;
     deletedIdsRef.current = [];
+    saveInFlightRef.current = true;
 
     try {
       // Tag each id-less row with its client nonce so we can match server
@@ -561,6 +563,13 @@ export default function ExpensesPage() {
 
       // The endpoint returns the full record list (with server-generated IDs).
       const serverRecords: any[] = await api.bulkUpdateRecords(template.id, toSend, deletedIds);
+      saveInFlightRef.current = false;
+
+      // Strip _clientNonce from server response data to prevent DB pollution.
+      const cleanServerRecords = serverRecords.map((r: any) => {
+        const { _clientNonce: nonce, ...cleanData } = r.data ?? {};
+        return { ...r, data: cleanData, _nonce: nonce };
+      });
 
       // Merge server data with local state:
       // - If no new edits arrived during the save, use the server snapshot
@@ -571,16 +580,15 @@ export default function ExpensesPage() {
         if (!hasUnsaved.current) {
           // No concurrent edits — safe to accept server state.
           return sortRecordsByCreatedAtDesc(
-            serverRecords.map((r: any) => ({ id: r.id, data: r.data, createdAt: r.createdAt })),
+            cleanServerRecords.map((r: any) => ({ id: r.id, data: r.data, createdAt: r.createdAt })),
           );
         }
 
         // Concurrent edits happened — match by client nonce to assign the
         // correct server ID to each row that was part of this save.
         const serverByNonce = new Map<string, any>();
-        for (const sr of serverRecords) {
-          const nonce = sr.data?._clientNonce;
-          if (nonce) serverByNonce.set(nonce, sr);
+        for (const sr of cleanServerRecords) {
+          if (sr._nonce) serverByNonce.set(sr._nonce, sr);
         }
 
         return localRecords.map((r) => {
@@ -602,6 +610,7 @@ export default function ExpensesPage() {
       savedTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
     } catch (e) {
       // Restore the unsaved flag so the next attempt includes these changes.
+      saveInFlightRef.current = false;
       hasUnsaved.current = true;
       deletedIdsRef.current = [...deletedIds, ...deletedIdsRef.current];
       console.error('Save failed:', e);
