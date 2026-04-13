@@ -245,7 +245,15 @@ export class RecordContextService {
       throw new NotFoundException('Record not found');
     }
 
-    await this.recordActions.deleteRecord(recordId);
+    const recordData = (record.data as Record<string, any>) ?? {};
+    if (recordData._billId) {
+      // Soft-delete: mark as deleted so sync doesn't recreate it.
+      await this.recordActions.updateRecord(recordId, {
+        data: { ...recordData, _autoExpenseDeleted: true },
+      });
+    } else {
+      await this.recordActions.deleteRecord(recordId);
+    }
   }
   // #endregion
 }
