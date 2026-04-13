@@ -85,14 +85,21 @@ class ApiClient {
     const controller = new AbortController();
     const timeoutId = timeout > 0 ? setTimeout(() => controller.abort(), timeout) : null;
 
+    // Compose caller-provided signal (e.g. for aborting in-flight saves)
+    // with the internal timeout signal so both can cancel the request.
+    const { signal: callerSignal, ...restFetchOptions } = fetchOptions;
+    const combinedSignal = callerSignal
+      ? AbortSignal.any([controller.signal, callerSignal])
+      : controller.signal;
+
     try {
       const response = await fetch(`${this.baseUrl}${path}`, {
-        ...fetchOptions,
+        ...restFetchOptions,
         credentials: 'include',
-        signal: controller.signal,
+        signal: combinedSignal,
         headers: {
           ...this._getHeaders(),
-          ...fetchOptions.headers,
+          ...restFetchOptions.headers,
         },
       });
 
@@ -124,6 +131,12 @@ class ApiClient {
       return responseData as T;
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
+        // If the caller's signal triggered the abort, re-throw as-is
+        // so the caller can detect it with `instanceof DOMException`.
+        if (callerSignal?.aborted) {
+          throw error;
+        }
+        // Otherwise it was the internal timeout — wrap with a user message.
         const message = 'Przekroczono limit czasu połączenia z serwerem';
         const timeoutError = new Error(message) as Error & { _toastShown?: boolean };
         if (!suppressErrorToast) {
