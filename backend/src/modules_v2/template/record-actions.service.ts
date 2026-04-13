@@ -129,6 +129,9 @@ export class RecordActionsService {
     deletedIds?: string[],
   ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
+      // Track soft-deleted IDs so the upsert loop below skips them.
+      const softDeleteIds: string[] = [];
+
       // Handle deleted records — soft-delete auto-expense rows (those with
       // _billId) so the sync logic doesn't recreate them, hard-delete the rest.
       if (deletedIds?.length) {
@@ -138,7 +141,6 @@ export class RecordActionsService {
         });
 
         const hardDeleteIds: string[] = [];
-        const softDeleteIds: string[] = [];
 
         for (const rec of toDelete) {
           const recData = (rec.data as Record<string, any>) ?? {};
@@ -165,8 +167,9 @@ export class RecordActionsService {
         }
       }
 
-      // Upsert records
+      // Upsert records — skip any that were just soft-deleted above.
       for (const record of records) {
+        if (record.id && softDeleteIds.includes(record.id)) continue;
         if (record.id) {
           await tx.templateRecord.update({
             where: { id: record.id },
