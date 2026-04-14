@@ -11,6 +11,16 @@ import { CreateDepositDto } from './dto/create-deposit.dto';
 export class SavingsController {
   constructor(private readonly savingsContext: SavingsContextService) {}
 
+  @Get('config')
+  async getConfig(@FamilyId() familyId: string) {
+    return this.savingsContext.getSavingsConfig(familyId);
+  }
+
+  @Put('config')
+  async updateConfig(@FamilyId() familyId: string, @Body() config: Record<string, any>) {
+    return this.savingsContext.updateSavingsConfig(familyId, config);
+  }
+
   @Get('goals')
   async getGoals(@FamilyId() familyId: string) {
     return this.savingsContext.getGoals(familyId);

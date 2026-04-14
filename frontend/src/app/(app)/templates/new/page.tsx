@@ -37,6 +37,9 @@ interface IColumnDef {
   currencies?: string[];
   tagGroupId?: string;
   defaultTagId?: string;
+  colorFieldByTag?: string;
+  colorRowByTag?: boolean;
+  allowMultiple?: boolean;
 }
 
 interface ITagGroup {
@@ -51,7 +54,6 @@ const COLUMN_TYPES = [
   { value: 'date', label: 'Data' },
   { value: 'checkbox', label: 'Checkbox' },
   { value: 'select', label: 'Lista wyboru' },
-  { value: 'tags', label: 'Tagi' },
   { value: 'tag_group', label: 'Tag grupa' },
   { value: 'currency', label: 'Waluta' },
   { value: 'person', label: 'Osoba' },
@@ -112,13 +114,17 @@ export default function NewTemplatePage() {
   const saveColumnEdit = () => {
     if (!editingCol) return;
     const updated = { ...editingCol };
-    if (updated.type === 'select' || updated.type === 'tags') {
+    if (updated.type === 'select') {
       updated.options = optionsText.split('\n').map(s => s.trim()).filter(Boolean);
     }
     if (updated.type === 'currency') {
       updated.currencies = currenciesText.split(',').map(s => s.trim()).filter(Boolean);
     }
-    setColumns(columns.map(c => c.id === updated.id ? updated : c));
+    if (updated.colorRowByTag) {
+      setColumns(columns.map(c => c.id === updated.id ? updated : { ...c, colorRowByTag: false }));
+    } else {
+      setColumns(columns.map(c => c.id === updated.id ? updated : c));
+    }
     setEditingCol(null);
   };
 
@@ -247,7 +253,7 @@ export default function NewTemplatePage() {
 
       {/* Column Editor Dialog */}
       <Dialog open={!!editingCol} onOpenChange={(open) => { if (!open) setEditingCol(null); }}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{editingCol?.name ? `Edytuj: ${editingCol.name}` : 'Nowa kolumna'}</DialogTitle>
           </DialogHeader>
@@ -297,7 +303,7 @@ export default function NewTemplatePage() {
                 </div>
               </div>
 
-              {(editingCol.type === 'select' || editingCol.type === 'tags') && (
+              {editingCol.type === 'select' && (
                 <div>
                   <Label>Opcje (każda w nowej linii)</Label>
                   <textarea
@@ -359,6 +365,39 @@ export default function NewTemplatePage() {
                       </div>
                     );
                   })()}
+                  <div className="border-t pt-3 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        checked={editingCol.allowMultiple !== false}
+                        onCheckedChange={(v) => setEditingCol({ ...editingCol, allowMultiple: !!v })}
+                        id="allowMultiple"
+                      />
+                      <Label htmlFor="allowMultiple" className="text-sm">Pozwalaj na wiele</Label>
+                    </div>
+                    <div>
+                      <Label>Koloruj pole danym tagiem</Label>
+                      <Select
+                        value={editingCol.colorFieldByTag ?? '_none'}
+                        onValueChange={(v) => setEditingCol({ ...editingCol, colorFieldByTag: v === '_none' ? undefined : v })}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="_none">Brak</SelectItem>
+                          {columns.filter(c => c.id !== editingCol.id).map(c => (
+                            <SelectItem key={c.id} value={c.id}>{c.name || c.id}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        checked={!!editingCol.colorRowByTag}
+                        onCheckedChange={(v) => setEditingCol({ ...editingCol, colorRowByTag: !!v })}
+                        id="colorRowByTag"
+                      />
+                      <Label htmlFor="colorRowByTag" className="text-sm">Koloruj wiersz danym tagiem</Label>
+                    </div>
+                  </div>
                 </div>
               )}
 

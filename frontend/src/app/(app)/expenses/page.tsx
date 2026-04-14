@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
+import { Tag } from '@/components/Tag';
 import {
   Select,
   SelectContent,
@@ -38,6 +39,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -51,7 +57,6 @@ import {
   Plus,
   Trash2,
   MoreVertical,
-  Save,
   Download,
   Upload,
   Camera,
@@ -68,6 +73,9 @@ import {
 import { ExpenseFilters, EMPTY_FILTERS, type IExpenseFilterState } from './ExpenseFilters';
 import { ExpenseSummary } from './ExpenseSummary';
 import { CSVImportDialog } from './CSVImportDialog';
+import { BillingPeriodBar } from './BillingPeriodBar';
+import { BudgetProgressBar } from './BudgetProgressBar';
+import type { IBillingPeriodConfig } from '@shared/models';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -79,13 +87,21 @@ interface ColumnDef {
   options?: string[];
   currencyOptions?: string[];
   defaultBehavior: string;
+  colorFieldByTag?: string;
+  colorRowByTag?: boolean;
+  allowMultiple?: boolean;
+  tagGroupId?: string;
+  defaultTagId?: string;
 }
 
 interface RecordRow {
   id?: string;
   data: Record<string, any>;
+  createdAt?: string;
   isNew?: boolean;
   isDirty?: boolean;
+  /** Temporary client-side identifier used to match new rows with server responses after save. */
+  _clientNonce?: string;
 }
 
 type SortDir = 'asc' | 'desc' | null;
@@ -102,7 +118,7 @@ function getDefaultValue(col: ColumnDef, _username?: string): any {
       return _username ?? '';
     default:
       if (col.type === 'currency') return { amount: 0, currency: col.currencyOptions?.[0] ?? 'PLN' };
-      if (col.type === 'tags') return [];
+      if (col.type === 'tag_group') return [];
       if (col.type === 'checkbox') return false;
       return '';
   }
@@ -117,6 +133,18 @@ function getCellSortValue(data: Record<string, any>, colId: string): string | nu
   return String(v);
 }
 
+function sortRecordsByCreatedAtDesc(records: RecordRow[]): RecordRow[] {
+  return [...records].sort((a, b) => {
+    const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+
+    if (aTime !== bTime) return bTime - aTime;
+    if (a.isNew && !b.isNew) return -1;
+    if (!a.isNew && b.isNew) return 1;
+    return 0;
+  });
+}
+
 const ROWS_PER_PAGE = 50;
 
 export default function ExpensesPage() {
@@ -125,14 +153,118 @@ export default function ExpensesPage() {
   const [allRecords, setAllRecords] = useState<RecordRow[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
   const [familyMembers, setFamilyMembers] = useState<any[]>([]);
+  const [tagGroups, setTagGroups] = useState<any[]>([]);
+  const [tagMappings, setTagMappings] = useState<{ income?: string; expense?: string; planning?: string; costs?: string; savings?: string }>({});
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [receiptDialogOpen, setReceiptDialogOpen] = useState(false);
   const [receiptImage, setReceiptImage] = useState<string | null>(null);
   const [receiptLoading, setReceiptLoading] = useState(false);
   const [csvImportOpen, setCSVImportOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<{ rowIndex: number } | null>(null);
   const hasUnsaved = useRef(false);
+  const saveInFlightRef = useRef(false);
+  const saveAbortRef = useRef<AbortController | null>(null);
+  const deletedIdsRef = useRef<string[]>([]);
+  const allRecordsRef = useRef<RecordRow[]>([]);
+  const templateIdRef = useRef<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveAllRef = useRef<() => Promise<void>>(async () => {});
+
+  // Billing period state
+  const [billingPeriodConfig, setBillingPeriodConfig] = useState<IBillingPeriodConfig | null>(null);
+  const [periodDateRange, setPeriodDateRange] = useState<{ from: string; to: string } | null>(null);
+  const [periodInfo, setPeriodInfo] = useState<any>(null);
+
+  const handlePeriodChange = useCallback((from: string, to: string) => {
+    setPeriodDateRange({ from, to });
+  }, []);
+
+  const triggerAutoSave = useCallback(() => {
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(() => {
+      saveAllRef.current();
+    }, 20_000);
+  }, []);
+
+  const flushPendingChanges = useCallback(async (mode: 'normal' | 'keepalive' = 'normal') => {
+    // If a save is in flight, abort it first so the keepalive replaces it
+    // rather than racing (which would create duplicate new rows).
+    if (saveInFlightRef.current && mode === 'keepalive') {
+      saveAbortRef.current?.abort();
+      saveInFlightRef.current = false;
+    } else if (!hasUnsaved.current && !saveInFlightRef.current) {
+      return;
+    }
+
+    const templateId = templateIdRef.current;
+    if (!templateId) return;
+
+    const payload = allRecordsRef.current.map((record, index) => ({
+      id: record.id,
+      data: record.data,
+      sortOrder: index,
+    }));
+    const deletedIds = [...deletedIdsRef.current];
+
+    try {
+      if (mode === 'keepalive') {
+        api.bulkUpdateRecordsKeepalive(templateId, payload, deletedIds);
+        return;
+      }
+
+      await api.bulkUpdateRecords(templateId, payload, deletedIds);
+      hasUnsaved.current = false;
+      deletedIdsRef.current = [];
+      window.dispatchEvent(new Event('financio:summary-refresh'));
+    } catch (error) {
+      console.error('Flush before unload failed:', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    allRecordsRef.current = allRecords;
+  }, [allRecords]);
+
+  useEffect(() => {
+    templateIdRef.current = template?.id ?? null;
+  }, [template]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+        void saveAllRef.current();
+      }
+    };
+
+    const handlePageHide = () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      void flushPendingChanges('keepalive');
+    };
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasUnsaved.current && !saveInFlightRef.current) return;
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      void flushPendingChanges('keepalive');
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+      void flushPendingChanges();
+    };
+  }, [flushPendingChanges]);
 
   // Filtering, sorting, pagination state
   const [filters, setFilters] = useState<IExpenseFilterState>(EMPTY_FILTERS);
@@ -142,8 +274,11 @@ export default function ExpensesPage() {
   const [page, setPage] = useState(1);
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
-  const columns: ColumnDef[] = template?.columns ?? [];
-  const visibleColumns = columns.filter((c) => !hiddenColumns.has(c.id));
+  const columns = useMemo<ColumnDef[]>(() => template?.columns ?? [], [template?.columns]);
+  const visibleColumns = useMemo(
+    () => columns.filter((column) => !hiddenColumns.has(column.id)),
+    [columns, hiddenColumns],
+  );
 
   // Category color map
   const categoryColorMap = useMemo(() => {
@@ -154,23 +289,60 @@ export default function ExpensesPage() {
     return map;
   }, [categories]);
 
+  // Tag color map from tagGroups (tag name → color)
+  const tagColorMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const group of tagGroups) {
+      for (const tag of group.tags ?? []) {
+        map[tag.name] = tag.color || '#888';
+      }
+    }
+    return map;
+  }, [tagGroups]);
+
+  // Combined color map: tag_group columns use tagColorMap for row/cell coloring
+  const getColorForTag = useCallback((tagName: string) => {
+    return tagColorMap[tagName] || categoryColorMap[tagName] || '#888';
+  }, [tagColorMap, categoryColorMap]);
+
   const loadData = useCallback(async () => {
     try {
-      const [tmpl, cats, members] = await Promise.all([
+      const [tmpl, cats, members, tGroups, mappings] = await Promise.all([
         api.getDefaultTemplate(),
         api.getCategories(),
         api.getFamilyMembers().catch(() => []),
+        api.getTagGroups().catch(() => []),
+        api.getTagMappings().catch(() => ({})),
       ]);
       setTemplate(tmpl);
       setCategories(cats);
       setFamilyMembers(Array.isArray(members) ? members : []);
+      setTagGroups(Array.isArray(tGroups) ? tGroups : []);
+      setTagMappings(mappings ?? {});
+
+      try {
+        await api.syncBillAutoExpenses();
+      } catch (error) {
+        console.error('Failed to sync recurring expenses:', error);
+      }
+
+      // Load billing period config
+      if (tmpl.billingPeriod?.type) {
+        setBillingPeriodConfig(tmpl.billingPeriod as IBillingPeriodConfig);
+        try {
+          const pInfo = await api.getBillingPeriod(tmpl.id);
+          setPeriodInfo(pInfo);
+        } catch { /* no billing period */ }
+      }
 
       const result = await api.getRecords(tmpl.id, 1, 500);
-      const rows: RecordRow[] = (result.records ?? []).map((r: any) => ({
-        id: r.id,
-        data: r.data,
-      }));
-      setAllRecords(rows);
+      const rows: RecordRow[] = (result.records ?? []).map((r: any) => {
+        // Strip transient _clientNonce that may still be in the DB for
+        // recently-created rows (cleaned on next save).
+        const { _clientNonce: _, ...cleanData } = r.data ?? {};
+        return { id: r.id, data: cleanData, createdAt: r.createdAt };
+      });
+      setAllRecords(sortRecordsByCreatedAtDesc(rows));
     } catch (e) {
       console.error('Failed to load expenses:', e);
     } finally {
@@ -182,9 +354,27 @@ export default function ExpensesPage() {
     loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    const handleLinkedDataRefresh = () => {
+      void loadData();
+    };
+
+    window.addEventListener('financio:summary-refresh', handleLinkedDataRefresh);
+    return () => window.removeEventListener('financio:summary-refresh', handleLinkedDataRefresh);
+  }, [loadData]);
+
   // ─── Filtering ────────────────────────────────────
   const filteredRecords = useMemo(() => {
     let result = allRecords;
+
+    // Apply billing period filtering (if configured and no manual date filter)
+    if (periodDateRange && !filters.dateFrom && !filters.dateTo) {
+      result = result.filter((r) => {
+        const date = r.data.col_date;
+        if (!date) return true;
+        return date >= periodDateRange.from && date < periodDateRange.to;
+      });
+    }
 
     if (filters.search) {
       const q = filters.search.toLowerCase();
@@ -223,7 +413,7 @@ export default function ExpensesPage() {
     }
 
     return result;
-  }, [allRecords, filters]);
+  }, [allRecords, filters, periodDateRange]);
 
   // ─── Sorting ──────────────────────────────────────
   const sortedRecords = useMemo(() => {
@@ -276,12 +466,16 @@ export default function ExpensesPage() {
     for (const col of columns) {
       newData[col.id] = getDefaultValue(col, user?.firstName ?? user?.username ?? '');
     }
-    setAllRecords((prev) => [...prev, { data: newData, isNew: true, isDirty: true }]);
+    setAllRecords((prev) => [{
+      data: newData,
+      createdAt: new Date().toISOString(),
+      isNew: true,
+      isDirty: true,
+      _clientNonce: crypto.randomUUID(),
+    }, ...prev]);
     hasUnsaved.current = true;
-    // Jump to last page
-    const newTotal = Math.ceil((allRecords.length + 1) / ROWS_PER_PAGE);
-    setPage(newTotal);
-  }, [columns, user, allRecords.length]);
+    setPage(1);
+  }, [columns, user]);
 
   const updateCell = useCallback((globalIndex: number, colId: string, value: any) => {
     setAllRecords((prev) => {
@@ -294,13 +488,21 @@ export default function ExpensesPage() {
       return copy;
     });
     hasUnsaved.current = true;
-  }, []);
+    triggerAutoSave();
+  }, [triggerAutoSave]);
 
   const removeRow = useCallback((globalIndex: number) => {
-    setAllRecords((prev) => prev.filter((_, i) => i !== globalIndex));
+    setAllRecords((prev) => {
+      const row = prev[globalIndex];
+      if (row?.id) {
+        deletedIdsRef.current = [...deletedIdsRef.current, row.id];
+      }
+      return prev.filter((_, i) => i !== globalIndex);
+    });
     hasUnsaved.current = true;
     setDeleteConfirm(null);
-  }, []);
+    triggerAutoSave();
+  }, [triggerAutoSave]);
 
   const duplicateRow = useCallback(
     (globalIndex: number) => {
@@ -312,11 +514,16 @@ export default function ExpensesPage() {
         col_paid: false,
       };
       setAllRecords((prev) => {
-        const copy = [...prev];
-        copy.splice(globalIndex + 1, 0, { data: newData, isNew: true, isDirty: true });
-        return copy;
+        return [{
+          data: newData,
+          createdAt: new Date().toISOString(),
+          isNew: true,
+          isDirty: true,
+          _clientNonce: crypto.randomUUID(),
+        }, ...prev];
       });
       hasUnsaved.current = true;
+      setPage(1);
     },
     [allRecords],
   );
@@ -336,34 +543,100 @@ export default function ExpensesPage() {
   }, []);
 
   const saveAll = useCallback(async () => {
-    if (!template) return;
-    setSaving(true);
+    if (!template || !hasUnsaved.current) return;
+    setSaveStatus('saving');
+
+    // Snapshot the latest state from refs so we always send the most
+    // up-to-date data, even if React hasn't re-rendered yet.
+    const currentRecords = allRecordsRef.current;
+    const deletedIds = [...deletedIdsRef.current];
+
+    // Optimistically mark as saved. If the user edits another cell while
+    // the request is in flight, updateCell / removeRow will flip it back.
+    hasUnsaved.current = false;
+    deletedIdsRef.current = [];
+    saveInFlightRef.current = true;
+
     try {
-      const toSend = allRecords.map((r, i) => ({
+      // Tag each id-less row with its client nonce so we can match server
+      // responses back to the correct local row after the save.
+      const sentNonces = new Set(
+        currentRecords.filter((r) => !r.id && r._clientNonce).map((r) => r._clientNonce as string),
+      );
+
+      const toSend = currentRecords.map((r, i) => ({
         id: r.id,
-        data: r.data,
+        data: r.id ? r.data : { ...r.data, _clientNonce: r._clientNonce },
         sortOrder: i,
       }));
-      const originalIds = allRecords.filter((r) => r.id).map((r) => r.id!);
-      const currentIds = new Set(allRecords.filter((r) => r.id).map((r) => r.id!));
-      const deletedIds = originalIds.filter((id) => !currentIds.has(id));
 
-      await api.bulkUpdateRecords(template.id, toSend, deletedIds);
-      hasUnsaved.current = false;
+      // The endpoint returns the full record list (with server-generated IDs).
+      const abortCtrl = new AbortController();
+      saveAbortRef.current = abortCtrl;
+      const serverRecords: any[] = await api.bulkUpdateRecords(template.id, toSend, deletedIds, abortCtrl.signal);
+      saveAbortRef.current = null;
+      saveInFlightRef.current = false;
 
-      const result = await api.getRecords(template.id, 1, 500);
-      setAllRecords(
-        (result.records ?? []).map((r: any) => ({
-          id: r.id,
-          data: r.data,
-        })),
-      );
+      // Strip _clientNonce from server response data to prevent DB pollution.
+      const cleanServerRecords = serverRecords.map((r: any) => {
+        const { _clientNonce: nonce, ...cleanData } = r.data ?? {};
+        return { ...r, data: cleanData, _nonce: nonce };
+      });
+
+      // Merge server data with local state:
+      // - If no new edits arrived during the save, use the server snapshot
+      //   (assigns IDs to new records, reflects any server-side changes).
+      // - If the user edited while we were saving, keep the local data for
+      //   dirty records and only patch IDs onto new rows.
+      setAllRecords((localRecords) => {
+        if (!hasUnsaved.current) {
+          // No concurrent edits — safe to accept server state.
+          return sortRecordsByCreatedAtDesc(
+            cleanServerRecords.map((r: any) => ({ id: r.id, data: r.data, createdAt: r.createdAt })),
+          );
+        }
+
+        // Concurrent edits happened — match by client nonce to assign the
+        // correct server ID to each row that was part of this save.
+        const serverByNonce = new Map<string, any>();
+        for (const sr of cleanServerRecords) {
+          if (sr._nonce) serverByNonce.set(sr._nonce, sr);
+        }
+
+        return localRecords.map((r) => {
+          if (r.id) return r; // existing row — keep local (possibly dirty) data
+          const nonce = r._clientNonce as string | undefined;
+          if (nonce && sentNonces.has(nonce)) {
+            const sr = serverByNonce.get(nonce);
+            if (sr) {
+              return { ...r, id: sr.id, createdAt: sr.createdAt, isNew: false, _clientNonce: undefined };
+            }
+          }
+          return r; // row added concurrently — leave as-is for next save
+        });
+      });
+
+      window.dispatchEvent(new Event('financio:summary-refresh'));
+      setSaveStatus('saved');
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
     } catch (e) {
+      saveAbortRef.current = null;
+      saveInFlightRef.current = false;
+      // If the request was aborted (e.g. by keepalive flush on unload),
+      // the keepalive already sent the data — don't restore unsaved flag.
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        setSaveStatus('idle');
+        return;
+      }
+      // Restore the unsaved flag so the next attempt includes these changes.
+      hasUnsaved.current = true;
+      deletedIdsRef.current = [...deletedIds, ...deletedIdsRef.current];
       console.error('Save failed:', e);
-    } finally {
-      setSaving(false);
+      setSaveStatus('idle');
     }
-  }, [allRecords, template]);
+  }, [template]);
+  saveAllRef.current = saveAll;
 
   const exportCSV = useCallback(() => {
     if (!columns.length || !allRecords.length) return;
@@ -438,9 +711,15 @@ export default function ExpensesPage() {
           <p className="text-sm text-muted-foreground">
             {sortedRecords.length} z {allRecords.length} wpisów
             {sortedRecords.length !== allRecords.length && ' (filtrowane)'}
+            {periodDateRange && !filters.dateFrom && !filters.dateTo && (
+              <span className="ml-1">• okres rozliczeniowy</span>
+            )}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={addRow}>
+            <Plus className="h-4 w-4 mr-1" /> Dodaj wiersz
+          </Button>
           <Button
             variant={showFilters ? 'default' : 'outline'}
             size="sm"
@@ -484,12 +763,14 @@ export default function ExpensesPage() {
           <Button variant="outline" size="sm" onClick={exportCSV}>
             <Download className="h-4 w-4 mr-1" /> CSV
           </Button>
-          <Button variant="outline" size="sm" onClick={addRow}>
-            <Plus className="h-4 w-4 mr-1" /> Dodaj
-          </Button>
-          <Button size="sm" onClick={saveAll} disabled={saving}>
-            <Save className="h-4 w-4 mr-1" /> {saving ? 'Zapisuję...' : 'Zapisz'}
-          </Button>
+          {saveStatus === 'saving' && (
+            <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Zapisywanie...
+            </span>
+          )}
+          {saveStatus === 'saved' && (
+            <span className="text-sm text-green-600 dark:text-green-400">✓ Zapisano</span>
+          )}
         </div>
       </div>
 
@@ -509,6 +790,24 @@ export default function ExpensesPage() {
       {/* Summary */}
       <ExpenseSummary records={sortedRecords} categories={categories} />
 
+      {/* Billing Period Bar */}
+      {billingPeriodConfig?.type && template && (
+        <BillingPeriodBar
+          templateId={template.id}
+          billingPeriodConfig={billingPeriodConfig}
+          onPeriodChange={handlePeriodChange}
+        />
+      )}
+
+      {/* Budget Progress Bar */}
+      {billingPeriodConfig?.budgetAmount && billingPeriodConfig.budgetAmount > 0 && periodInfo && (
+        <BudgetProgressBar
+          records={filteredRecords}
+          budgetAmount={billingPeriodConfig.budgetAmount}
+          periodProgress={periodInfo.progress ?? 0}
+        />
+      )}
+
       {/* Dynamic Table */}
       <div className="rounded-lg border bg-card overflow-x-auto">
         <Table>
@@ -518,7 +817,7 @@ export default function ExpensesPage() {
               {visibleColumns.map((col) => (
                 <TableHead
                   key={col.id}
-                  className="min-w-[120px] cursor-pointer select-none hover:bg-accent/50 transition-colors"
+                  className="min-w-30 cursor-pointer select-none hover:bg-accent/50 transition-colors"
                   onClick={() => handleSort(col.id)}
                 >
                   <span className="flex items-center gap-1">
@@ -552,21 +851,46 @@ export default function ExpensesPage() {
               paginatedRecords.map((row) => {
                 const globalIdx = getGlobalIndex(row);
                 const rowNum = (page - 1) * ROWS_PER_PAGE + paginatedRecords.indexOf(row) + 1;
+                // Row coloring from colorRowByTag column
+                const colorRowCol = columns.find(c => c.colorRowByTag);
+                let rowBgColor: string | undefined;
+                if (colorRowCol) {
+                  const rowTags = Array.isArray(row.data[colorRowCol.id]) ? row.data[colorRowCol.id] as string[] : [];
+                  const tagColor = rowTags.length > 0 ? getColorForTag(rowTags[0]) : undefined;
+                  if (tagColor && tagColor !== '#888') {
+                    rowBgColor = `${tagColor}15`;
+                  }
+                }
                 return (
-                  <TableRow key={row.id ?? `new-${globalIdx}`} className={row.isDirty ? 'bg-accent/30' : ''}>
+                  <TableRow key={row.id ?? `new-${globalIdx}`} style={rowBgColor ? { backgroundColor: rowBgColor } : undefined}>
                     <TableCell className="text-muted-foreground text-xs">{rowNum}</TableCell>
-                    {visibleColumns.map((col) => (
-                      <TableCell key={col.id} className="p-1">
-                        <CellEditor
-                          column={col}
-                          value={row.data[col.id]}
-                          onChange={(v) => updateCell(globalIdx, col.id, v)}
-                          categories={categories}
-                          familyMembers={familyMembers}
-                          categoryColorMap={categoryColorMap}
-                        />
-                      </TableCell>
-                    ))}
+                    {visibleColumns.map((col) => {
+                      // Cell coloring from colorFieldByTag
+                      let cellBgColor: string | undefined;
+                      if (col.colorFieldByTag) {
+                        const refTags = Array.isArray(row.data[col.colorFieldByTag]) ? row.data[col.colorFieldByTag] as string[] : [];
+                        const tagColor = refTags.length > 0 ? getColorForTag(refTags[0]) : undefined;
+                        if (tagColor && tagColor !== '#888') {
+                          cellBgColor = `${tagColor}20`;
+                        }
+                      }
+                      return (
+                        <TableCell key={col.id} className="p-1" style={cellBgColor ? { backgroundColor: cellBgColor } : undefined}>
+                          <CellEditor
+                            column={col}
+                            value={row.data[col.id]}
+                            onChange={(v) => updateCell(globalIdx, col.id, v)}
+                            onBlur={triggerAutoSave}
+                            familyMembers={familyMembers}
+                            tagGroups={tagGroups}
+                            tagColorMap={tagColorMap}
+                            tagMappings={tagMappings}
+                            rowData={row.data}
+                            columns={columns}
+                          />
+                        </TableCell>
+                      );
+                    })}
                     <TableCell className="p-1">
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -641,18 +965,13 @@ export default function ExpensesPage() {
         </div>
       )}
 
-      {/* Quick add at bottom */}
-      <Button variant="ghost" size="sm" onClick={addRow} className="w-full border border-dashed">
-        <Plus className="h-4 w-4 mr-1" /> Nowy wiersz
-      </Button>
-
       {/* Delete confirmation */}
       <AlertDialog open={deleteConfirm !== null} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Usunąć wiersz?</AlertDialogTitle>
             <AlertDialogDescription>
-              Czy na pewno chcesz usunąć ten wpis? Operacja zostanie zapisana po kliknięciu &quot;Zapisz&quot;.
+              Czy na pewno chcesz usunąć ten wpis? Zmiana zostanie zapisana automatycznie.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -669,7 +988,7 @@ export default function ExpensesPage() {
 
       {/* Receipt image dialog */}
       <Dialog open={receiptDialogOpen} onOpenChange={setReceiptDialogOpen}>
-        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Camera className="h-5 w-5" />
@@ -717,16 +1036,24 @@ function CellEditor({
   column,
   value,
   onChange,
-  categories,
+  onBlur,
   familyMembers,
-  categoryColorMap,
+  tagGroups,
+  tagColorMap,
+  tagMappings,
+  rowData,
+  columns,
 }: {
   column: ColumnDef;
   value: any;
   onChange: (v: any) => void;
-  categories: any[];
+  onBlur?: () => void;
   familyMembers: any[];
-  categoryColorMap: Record<string, string>;
+  tagGroups: any[];
+  tagColorMap: Record<string, string>;
+  tagMappings: { income?: string; expense?: string; planning?: string; costs?: string; savings?: string };
+  rowData: Record<string, any>;
+  columns: ColumnDef[];
 }) {
   switch (column.type) {
     case 'text':
@@ -734,6 +1061,7 @@ function CellEditor({
         <Input
           value={value ?? ''}
           onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur}
           className="h-8 text-sm border-0 bg-transparent focus:bg-card"
           placeholder={column.name}
         />
@@ -745,6 +1073,7 @@ function CellEditor({
           type="number"
           value={value ?? ''}
           onChange={(e) => onChange(e.target.value ? Number(e.target.value) : '')}
+          onBlur={onBlur}
           className="h-8 text-sm border-0 bg-transparent focus:bg-card"
           placeholder="0"
         />
@@ -756,6 +1085,7 @@ function CellEditor({
           type="date"
           value={value ?? ''}
           onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur}
           className="h-8 text-sm border-0 bg-transparent focus:bg-card"
         />
       );
@@ -765,14 +1095,14 @@ function CellEditor({
         <div className="flex justify-center">
           <Checkbox
             checked={!!value}
-            onCheckedChange={(checked) => onChange(!!checked)}
+            onCheckedChange={(checked) => { onChange(!!checked); onBlur?.(); }}
           />
         </div>
       );
 
     case 'select':
       return (
-        <Select value={value ?? ''} onValueChange={onChange}>
+        <Select value={value ?? ''} onValueChange={(v) => { onChange(v); onBlur?.(); }}>
           <SelectTrigger className="h-8 text-sm border-0 bg-transparent">
             <SelectValue placeholder={`Wybierz...`} />
           </SelectTrigger>
@@ -789,6 +1119,35 @@ function CellEditor({
     case 'currency': {
       const amount = value?.amount ?? '';
       const currency = value?.currency ?? column.currencyOptions?.[0] ?? 'PLN';
+      // Dynamic background based on tag mappings (income/expense)
+      // tagMappings values are tag IDs, but record values are tag names — resolve first
+      let amountBg: string | undefined;
+      if (tagMappings.income || tagMappings.expense) {
+        // Build a tag ID → name lookup from tagGroups
+        const idToName: Record<string, string> = {};
+        for (const group of tagGroups) {
+          for (const tag of group.tags ?? []) {
+            idToName[tag.id] = tag.name;
+          }
+        }
+        const incomeTagName = tagMappings.income ? idToName[tagMappings.income] : undefined;
+        const expenseTagName = tagMappings.expense ? idToName[tagMappings.expense] : undefined;
+
+        const tagGroupCols = columns.filter(c => c.type === 'tag_group');
+        for (const tgCol of tagGroupCols) {
+          const cellVal = rowData[tgCol.id];
+          const selectedValues: string[] = Array.isArray(cellVal) ? cellVal : cellVal ? [cellVal] : [];
+          if (incomeTagName && selectedValues.includes(incomeTagName)) {
+            amountBg = 'rgba(34, 197, 94, 0.12)';
+            break;
+          }
+          if (expenseTagName && selectedValues.includes(expenseTagName)) {
+            amountBg = 'rgba(239, 68, 68, 0.12)';
+            break;
+          }
+        }
+      }
+
       return (
         <div className="flex items-center gap-1">
           <Input
@@ -798,7 +1157,14 @@ function CellEditor({
             onChange={(e) =>
               onChange({ amount: e.target.value ? Number(e.target.value) : '', currency })
             }
-            className="h-8 text-sm border-0 bg-transparent focus:bg-card flex-1"
+            onFocus={(e) => {
+              if (Number(e.target.value) === 0) {
+                onChange({ amount: '', currency });
+              }
+            }}
+            onBlur={onBlur}
+            className="h-8 text-sm border-0 flex-1 rounded-md"
+            style={amountBg ? { backgroundColor: amountBg } : undefined}
             placeholder="0.00"
           />
           <span className="text-xs text-muted-foreground shrink-0">{currency}</span>
@@ -806,51 +1172,70 @@ function CellEditor({
       );
     }
 
-    case 'tags': {
+    case 'tag_group': {
       const tags: string[] = Array.isArray(value) ? value : [];
-      const categoryNames = categories.map((c: any) => c.name);
+      const group = tagGroups.find((g: any) => g.id === column.tagGroupId);
+      const availableTags: any[] = group?.tags ?? [];
+      const allowMultiple = column.allowMultiple !== false;
+
+      const toggleTag = (tagName: string) => {
+        if (tags.includes(tagName)) {
+          onChange(tags.filter((t) => t !== tagName));
+        } else {
+          if (allowMultiple) {
+            onChange([...tags, tagName]);
+          } else {
+            onChange([tagName]);
+          }
+        }
+        if (!allowMultiple) onBlur?.();
+      };
+
       return (
-        <div className="flex flex-wrap gap-1 items-center min-h-[32px]">
-          {tags.map((tag) => (
-            <Badge
-              key={tag}
-              variant="secondary"
-              className="text-xs cursor-pointer hover:bg-destructive/20 gap-1"
-              style={{
-                backgroundColor: categoryColorMap[tag] ? `${categoryColorMap[tag]}20` : undefined,
-                color: categoryColorMap[tag] || undefined,
-                borderColor: categoryColorMap[tag] || undefined,
-              }}
-              onClick={() => onChange(tags.filter((t) => t !== tag))}
+        <Popover onOpenChange={(open) => { if (!open) onBlur?.(); }}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="flex flex-wrap gap-1 items-center min-h-8 w-full rounded-md px-2 py-1 text-sm border-0 bg-transparent hover:bg-accent/50 cursor-pointer text-left"
             >
-              <span
-                className="inline-block h-2 w-2 rounded-full shrink-0"
-                style={{ backgroundColor: categoryColorMap[tag] || '#888' }}
-              />
-              {tag} ×
-            </Badge>
-          ))}
-          <Select onValueChange={(v) => { if (!tags.includes(v)) onChange([...tags, v]); }}>
-            <SelectTrigger className="h-6 w-20 text-xs border-0 bg-transparent">
-              <SelectValue placeholder="+" />
-            </SelectTrigger>
-            <SelectContent>
-              {categoryNames
-                .filter((n: string) => !tags.includes(n))
-                .map((name: string) => (
-                  <SelectItem key={name} value={name}>
-                    <span className="flex items-center gap-1.5">
-                      <span
-                        className="inline-block h-2 w-2 rounded-full"
-                        style={{ backgroundColor: categoryColorMap[name] || '#888' }}
-                      />
-                      {name}
-                    </span>
-                  </SelectItem>
-                ))}
-            </SelectContent>
-          </Select>
-        </div>
+              {tags.length === 0 ? (
+                <span className="text-muted-foreground text-xs">Wybierz...</span>
+              ) : (
+                tags.map((tag) => (
+                  <Tag
+                    key={tag}
+                    name={tag}
+                    color={tagColorMap[tag] || undefined}
+                    icon={availableTags.find((t: any) => t.name === tag)?.icon}
+                    className="pointer-events-none"
+                  />
+                ))
+              )}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-52 p-1" align="start">
+            <div className="max-h-48 overflow-y-auto">
+              {availableTags.length === 0 ? (
+                <p className="text-xs text-muted-foreground p-2 text-center">Brak tagów w grupie</p>
+              ) : (
+                availableTags.map((t: any) => {
+                  const isSelected = tags.includes(t.name);
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className={`flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded-sm hover:bg-accent cursor-pointer text-left ${isSelected ? 'bg-accent/60 font-medium' : ''}`}
+                      onClick={() => toggleTag(t.name)}
+                    >
+                      <Tag name={t.name} color={t.color} icon={t.icon} className="pointer-events-none" />
+                      {isSelected && <span className="text-primary">✓</span>}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </PopoverContent>
+        </Popover>
       );
     }
 
@@ -860,7 +1245,7 @@ function CellEditor({
         label: m.nickname || m.user?.firstName || m.user?.username || 'Unknown',
       }));
       return (
-        <Select value={value ?? ''} onValueChange={onChange}>
+        <Select value={value ?? ''} onValueChange={(v) => { onChange(v); onBlur?.(); }}>
           <SelectTrigger className="h-8 text-sm border-0 bg-transparent">
             <SelectValue placeholder="Osoba..." />
           </SelectTrigger>
@@ -880,6 +1265,7 @@ function CellEditor({
         <Input
           value={String(value ?? '')}
           onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur}
           className="h-8 text-sm border-0 bg-transparent"
         />
       );

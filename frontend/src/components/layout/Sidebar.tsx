@@ -8,7 +8,6 @@ import {
   Receipt,
   FileText,
   Camera,
-  Repeat,
   PiggyBank,
   BarChart3,
   Settings,
@@ -23,6 +22,9 @@ import {
   Store,
   Target,
   CalendarDays,
+  Calculator,
+  KanbanSquare,
+  Banknote,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -41,14 +43,16 @@ interface NavItem {
 const mainNav: NavItem[] = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/expenses', label: 'Wydatki', icon: Receipt },
-  { href: '/bills', label: 'Rachunki', icon: FileText },
+  { href: '/bills', label: 'Cykliczne wydatki', icon: FileText },
   { href: '/receipts', label: 'Paragony', icon: Camera },
   { href: '/stores', label: 'Sklepy', icon: Store },
   { href: '/budgets', label: 'Budżety', icon: Target },
-  { href: '/fixed-expenses', label: 'Stałe wydatki', icon: Repeat },
   { href: '/savings', label: 'Oszczędności', icon: PiggyBank },
   { href: '/events', label: 'Wydarzenia', icon: CalendarDays },
+  { href: '/kanban', label: 'Kanban', icon: KanbanSquare },
   { href: '/statistics', label: 'Statystyki', icon: BarChart3 },
+  { href: '/taxes', label: 'Podatki', icon: Calculator },
+  { href: '/invoices', label: 'Przychody', icon: Banknote },
 ];
 
 const bottomNav: NavItem[] = [

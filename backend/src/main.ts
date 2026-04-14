@@ -31,7 +31,7 @@ async function bootstrap() {
   app.use(
     session({
       store: new PgStore({
-        pool: sessionPool,
+        pool: sessionPool as any,
         tableName: 'user_sessions',
         createTableIfMissing: true,
       }),
@@ -40,10 +40,10 @@ async function bootstrap() {
       resave: false,
       saveUninitialized: false,
       cookie: {
-        maxAge: 24 * 60 * 60 * 1000, // 1 day
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+        sameSite: 'lax',
       },
     }),
   );
@@ -56,7 +56,13 @@ async function bootstrap() {
     }),
   );
 
+  // Health check before global prefix so it's at /api/health
   app.setGlobalPrefix('api');
+
+  const httpAdapter = app.getHttpAdapter();
+  httpAdapter.get('/api/health', (_req: any, res: any) => {
+    res.status(200).send('ok');
+  });
 
   const port = process.env.BACKEND_PORT || 6001;
   await app.listen(port, '0.0.0.0');

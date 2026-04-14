@@ -6,7 +6,15 @@ import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
+import { Tag } from '@/components/Tag';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   Table,
   TableBody,
@@ -40,8 +48,16 @@ import {
   ImageIcon,
   Palette,
   X,
-  Tag,
+  Tag as TagIcon,
+  Settings,
+  FileText,
+  Receipt,
+  PiggyBank,
+  Calculator,
+  Banknote,
+  Save,
 } from 'lucide-react';
+import { toastError } from '@/lib/toast';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -102,8 +118,21 @@ export default function TagsPage() {
   // Show/hide tag form in edit dialog
   const [showTagForm, setShowTagForm] = useState(false);
 
+  // Tag mappings
+  const [tagMappings, setTagMappings] = useState<{ income?: string; expense?: string; planning?: string; costs?: string; savings?: string }>({});
+  const [savingMappings, setSavingMappings] = useState(false);
+
   // Drag state for tags within edit dialog
   const [dragIdx, setDragIdx] = useState<number | null>(null);
+
+  // Top-level tab state
+  const [pageTab, setPageTab] = useState<string>('tags');
+
+  // Expense mappings
+  const [expenseMappings, setExpenseMappings] = useState<any>(null);
+  const [expenseMappingsLoading, setExpenseMappingsLoading] = useState(false);
+  const [localConfigs, setLocalConfigs] = useState<Record<string, Record<string, any>>>({});
+  const [savingExpenseMapping, setSavingExpenseMapping] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -118,9 +147,44 @@ export default function TagsPage() {
     }
   }, []);
 
+  const loadTagMappings = useCallback(async () => {
+    try {
+      const data = await api.getTagMappings();
+      setTagMappings(data);
+    } catch (err) {
+      console.error('Failed to load tag mappings', err);
+    }
+  }, []);
+
+  const loadExpenseMappings = useCallback(async () => {
+    setExpenseMappingsLoading(true);
+    try {
+      const data = await api.getExpenseMappings();
+      setExpenseMappings(data);
+      // Init localConfigs from loaded data
+      const configs: Record<string, Record<string, any>> = {};
+      for (const sourceType of ['bills', 'receipts', 'savings', 'taxes', 'invoices']) {
+        configs[sourceType] = data?.mappings?.[sourceType]?.fieldConfigs ?? {};
+      }
+      setLocalConfigs(configs);
+    } catch (err) {
+      console.error('Failed to load expense mappings', err);
+    } finally {
+      setExpenseMappingsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadGroups();
-  }, [loadGroups]);
+    loadTagMappings();
+  }, [loadGroups, loadTagMappings]);
+
+  // Load expense mappings lazily when switching to mappings tab
+  useEffect(() => {
+    if (pageTab === 'mappings' && !expenseMappings && !expenseMappingsLoading) {
+      loadExpenseMappings();
+    }
+  }, [pageTab, expenseMappings, expenseMappingsLoading, loadExpenseMappings]);
 
   // Keep editingGroup in sync with groups after reload
   useEffect(() => {
@@ -141,7 +205,7 @@ export default function TagsPage() {
       setShowNewGroup(false);
       await loadGroups();
     } catch (err: any) {
-      alert(err.message || 'Błąd');
+      toastError(err.message || 'Błąd');
     } finally {
       setSavingGroup(false);
     }
@@ -153,7 +217,7 @@ export default function TagsPage() {
       await api.updateTagGroup(editingGroup.id, { name: editGroupName.trim() });
       await loadGroups();
     } catch (err: any) {
-      alert(err.message || 'Błąd');
+      toastError(err.message || 'Błąd');
     }
   };
 
@@ -164,7 +228,7 @@ export default function TagsPage() {
       setDeleteGroup(null);
       await loadGroups();
     } catch (err: any) {
-      alert(err.message || 'Błąd');
+      toastError(err.message || 'Błąd');
     }
   };
 
@@ -220,7 +284,7 @@ export default function TagsPage() {
       resetTagForm();
       await loadGroups();
     } catch (err: any) {
-      alert(err.message || 'Błąd');
+      toastError(err.message || 'Błąd');
     } finally {
       setSavingTag(false);
     }
@@ -234,7 +298,7 @@ export default function TagsPage() {
       resetTagForm();
       await loadGroups();
     } catch (err: any) {
-      alert(err.message || 'Błąd');
+      toastError(err.message || 'Błąd');
     }
   };
 
@@ -271,7 +335,7 @@ export default function TagsPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 512 * 1024) {
-      alert('Plik za duży (max 512KB)');
+      toastError('Plik za duży (max 512KB)');
       return;
     }
     const reader = new FileReader();
@@ -279,6 +343,129 @@ export default function TagsPage() {
       setTagForm((prev) => ({ ...prev, imageUrl: reader.result as string, icon: '' }));
     };
     reader.readAsDataURL(file);
+  };
+
+  // --- Tag Mappings ---
+
+  const allTags = groups.flatMap((g) => g.tags.map((t) => ({ ...t, groupName: g.name })));
+
+  const handleMappingChange = async (key: 'income' | 'expense' | 'planning' | 'costs' | 'savings', tagId: string) => {
+    const updated = { ...tagMappings, [key]: tagId || undefined };
+    if (!tagId) delete updated[key];
+    setTagMappings(updated);
+    setSavingMappings(true);
+    try {
+      await api.updateTagMappings(updated);
+    } catch (err) {
+      console.error('Failed to save tag mappings', err);
+    } finally {
+      setSavingMappings(false);
+    }
+  };
+
+  // --- Expense Mappings ---
+
+  const SOURCE_FIELDS: Record<string, Array<{ id: string; label: string }>> = {
+    bills: [
+      { id: 'name', label: 'Nazwa rachunku' },
+      { id: 'amount', label: 'Kwota' },
+      { id: 'paymentDate', label: 'Data płatności' },
+      { id: 'notes', label: 'Notatki' },
+      { id: 'tags', label: 'Tagi rachunku' },
+    ],
+    receipts: [
+      { id: 'amount', label: 'Kwota paragonu' },
+      { id: 'date', label: 'Data paragonu' },
+      { id: 'description', label: 'Opis paragonu' },
+      { id: 'notes', label: 'Notatki paragonu' },
+      { id: 'person', label: 'Osoba' },
+      { id: 'store', label: 'Sklep' },
+      { id: 'category', label: 'Kategoria' },
+      { id: 'items', label: 'Pozycje paragonu' },
+      { id: 'tags', label: 'Tagi paragonu' },
+    ],
+    savings: [
+      { id: 'goalName', label: 'Nazwa celu' },
+      { id: 'amount', label: 'Kwota wpłaty' },
+      { id: 'depositDate', label: 'Data wpłaty' },
+      { id: 'notes', label: 'Notatki' },
+      { id: 'description', label: 'Opis (cel + notatki)' },
+    ],
+    taxes: [
+      { id: 'name', label: 'Nazwa podatku' },
+      { id: 'type', label: 'Typ (ZUS/PIT/VAT_9M/CUSTOM)' },
+      { id: 'amount', label: 'Kwota' },
+      { id: 'paymentDate', label: 'Data płatności' },
+      { id: 'notes', label: 'Notatki' },
+      { id: 'description', label: 'Opis (nazwa + typ)' },
+    ],
+    invoices: [
+      { id: 'number', label: 'Numer faktury' },
+      { id: 'buyer', label: 'Nabywca' },
+      { id: 'amount', label: 'Kwota brutto' },
+      { id: 'netAmount', label: 'Kwota netto' },
+      { id: 'issueDate', label: 'Data wystawienia' },
+      { id: 'paymentDate', label: 'Data płatności' },
+      { id: 'dueDate', label: 'Termin płatności' },
+      { id: 'notes', label: 'Uwagi' },
+      { id: 'description', label: 'Opis (numer + nabywca)' },
+      { id: 'items', label: 'Pozycje faktury' },
+    ],
+  };
+
+  const SOURCE_TYPE_META: Array<{ id: string; label: string; description: string; icon: typeof FileText }> = [
+    { id: 'bills', label: 'Cykliczne wydatki', description: 'Rachunki i stałe opłaty', icon: FileText },
+    { id: 'receipts', label: 'Paragony', description: 'Paragony i faktury', icon: Receipt },
+    { id: 'savings', label: 'Oszczędności', description: 'Wpłaty na cele oszczędnościowe', icon: PiggyBank },
+    { id: 'taxes', label: 'Podatki', description: 'Opłacone podatki (ZUS, PIT, VAT, inne)', icon: Calculator },
+    { id: 'invoices', label: 'Przychody', description: 'Opłacone faktury (przychody, przelewy)', icon: Banknote },
+  ];
+
+  const handleFieldConfigChange = (sourceType: string, columnId: string, field: string, value: any) => {
+    setLocalConfigs((prev) => {
+      const current = prev[sourceType] ?? {};
+      const currentCol = current[columnId] ?? { mode: 'none' };
+      const updated = { ...currentCol, [field]: value };
+      // Reset dependent fields when mode changes
+      if (field === 'mode') {
+        if (value === 'none') {
+          return { ...prev, [sourceType]: { ...current, [columnId]: { mode: 'none' } } };
+        }
+        if (value === 'map') {
+          return { ...prev, [sourceType]: { ...current, [columnId]: { mode: 'map', sourceField: currentCol.sourceField ?? null, autoTagIds: [] } } };
+        }
+        if (value === 'auto_tags') {
+          return { ...prev, [sourceType]: { ...current, [columnId]: { mode: 'auto_tags', sourceField: null, autoTagIds: currentCol.autoTagIds ?? [] } } };
+        }
+        if (value === 'select') {
+          return { ...prev, [sourceType]: { ...current, [columnId]: { mode: 'select', sourceField: null, autoTagIds: [] } } };
+        }
+      }
+      return { ...prev, [sourceType]: { ...current, [columnId]: updated } };
+    });
+  };
+
+  const handleSaveExpenseMapping = async (sourceType: string) => {
+    const fieldConfigs = localConfigs[sourceType] ?? {};
+    setSavingExpenseMapping(sourceType);
+    try {
+      await api.updateExpenseMappings(sourceType, fieldConfigs);
+      await loadExpenseMappings();
+    } catch (err: any) {
+      toastError(err.message || 'Błąd zapisu mapowania');
+    } finally {
+      setSavingExpenseMapping(null);
+    }
+  };
+
+  const handleAutoTagToggle = (sourceType: string, columnId: string, tagId: string) => {
+    setLocalConfigs((prev) => {
+      const current = prev[sourceType] ?? {};
+      const currentCol = current[columnId] ?? { mode: 'auto_tags', autoTagIds: [] };
+      const ids = currentCol.autoTagIds ?? [];
+      const next = ids.includes(tagId) ? ids.filter((id: string) => id !== tagId) : [...ids, tagId];
+      return { ...prev, [sourceType]: { ...current, [columnId]: { ...currentCol, autoTagIds: next } } };
+    });
   };
 
   // --- Helpers ---
@@ -307,6 +494,13 @@ export default function TagsPage() {
 
   return (
     <div className="flex flex-col h-full">
+      <Tabs value={pageTab} onValueChange={setPageTab} className="flex flex-col h-full">
+        <TabsList className="w-fit mb-4">
+          <TabsTrigger value="tags">Tagi</TabsTrigger>
+          <TabsTrigger value="mappings">Mapowania</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="tags" className="flex-1 mt-0">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div>
@@ -322,7 +516,7 @@ export default function TagsPage() {
       {groups.length === 0 ? (
         <div className="flex-1 flex items-center justify-center border rounded-lg">
           <div className="text-center py-16">
-            <Tag className="h-12 w-12 mx-auto mb-3 text-muted-foreground/40" />
+            <TagIcon className="h-12 w-12 mx-auto mb-3 text-muted-foreground/40" />
             <p className="text-muted-foreground">Nie masz jeszcze żadnych grup tagów.</p>
             <p className="text-muted-foreground text-sm mb-4">Utwórz pierwszą grupę, aby rozpocząć.</p>
             <Button onClick={() => setShowNewGroup(true)}>
@@ -354,27 +548,13 @@ export default function TagsPage() {
                     ) : (
                       <div className="flex flex-wrap gap-1.5">
                         {group.tags.map((tag) => (
-                          <Badge
+                          <Tag
                             key={tag.id}
-                            variant="secondary"
-                            className="gap-1 pl-1.5 pr-2 py-0.5"
-                          >
-                            {tag.imageUrl ? (
-                              <img
-                                src={tag.imageUrl}
-                                alt={tag.name}
-                                className="h-4 w-4 rounded-full object-cover"
-                              />
-                            ) : tag.icon ? (
-                              <span className="text-xs">{tag.icon}</span>
-                            ) : (
-                              <div
-                                className="h-3 w-3 rounded-full"
-                                style={{ backgroundColor: tag.color }}
-                              />
-                            )}
-                            <span className="text-xs">{tag.name}</span>
-                          </Badge>
+                            name={tag.name}
+                            color={tag.color}
+                            icon={tag.icon}
+                            imageUrl={tag.imageUrl}
+                          />
                         ))}
                       </div>
                     )}
@@ -408,9 +588,215 @@ export default function TagsPage() {
         </div>
       )}
 
+        </TabsContent>
+
+        <TabsContent value="mappings" className="flex-1 mt-0">
+          {/* Tag Mapping Configurator */}
+          {groups.length > 0 && allTags.length > 0 && (
+            <Card className="mb-6">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Settings className="h-5 w-5" />
+                  Mapowanie tagów
+                </CardTitle>
+                <CardDescription>
+                  Przypisz tagi do funkcji aplikacji — np. który tag oznacza przychód, wydatek lub planowanie.
+                  Na tej podstawie kwoty będą kolorowane automatycznie.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                  {([
+                    { key: 'income' as const, label: 'Przychód', color: 'text-green-600 dark:text-green-400' },
+                    { key: 'expense' as const, label: 'Wydatek', color: 'text-red-600 dark:text-red-400' },
+                    { key: 'planning' as const, label: 'Planowanie', color: 'text-blue-600 dark:text-blue-400' },
+                    { key: 'costs' as const, label: 'Koszty podatkowe', color: 'text-amber-600 dark:text-amber-400' },
+                    { key: 'savings' as const, label: 'Oszczędności', color: 'text-emerald-600 dark:text-emerald-400' },
+                  ]).map(({ key, label, color }) => (
+                    <div key={key} className="space-y-1.5">
+                      <Label className={`text-sm font-medium ${color}`}>{label}</Label>
+                      <Select
+                        value={tagMappings[key] ?? '__none__'}
+                        onValueChange={(val) => handleMappingChange(key, val === '__none__' ? '' : val)}
+                      >
+                        <SelectTrigger className="h-9">
+                          <SelectValue placeholder="Brak" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">Brak</SelectItem>
+                          {allTags.map((tag) => (
+                            <SelectItem key={tag.id} value={tag.id}>
+                              <Tag name={tag.name} color={tag.color} icon={tag.icon} imageUrl={tag.imageUrl} groupName={tag.groupName} />
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ))}
+                </div>
+                {savingMappings && (
+                  <p className="text-xs text-muted-foreground mt-2">Zapisywanie...</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          <div className="mb-4">
+            <h2 className="text-xl font-bold tracking-tight">Mapowania wydatków</h2>
+            <p className="text-muted-foreground text-sm">
+              Konfiguruj jak automatycznie tworzone wydatki będą wypełniane danymi ze źródła
+            </p>
+          </div>
+
+          {expenseMappingsLoading ? (
+            <div className="flex items-center justify-center min-h-48">
+              <div className="flex flex-col items-center gap-3">
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+                <p className="text-sm text-muted-foreground">Ładowanie...</p>
+              </div>
+            </div>
+          ) : !expenseMappings ? (
+            <p className="text-muted-foreground">Nie udało się załadować konfiguracji.</p>
+          ) : (
+            <div className="space-y-6">
+              {SOURCE_TYPE_META.map(({ id: sourceType, label, description, icon: Icon }) => {
+                const fields = SOURCE_FIELDS[sourceType] ?? [];
+                const availableFields = (expenseMappings?.availableFields ?? []) as Array<{ id: string; name: string; type: string; tagGroupId?: string | null }>;
+                const cfgs = localConfigs[sourceType] ?? {};
+
+                return (
+                  <Card key={sourceType}>
+                    <CardHeader className="pb-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <CardTitle className="text-lg flex items-center gap-2">
+                            <Icon className="h-5 w-5" />
+                            {label}
+                          </CardTitle>
+                          <CardDescription>{description}</CardDescription>
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={() => handleSaveExpenseMapping(sourceType)}
+                          disabled={savingExpenseMapping === sourceType}
+                        >
+                          <Save className="h-4 w-4 mr-1" />
+                          {savingExpenseMapping === sourceType ? 'Zapisywanie...' : 'Zapisz'}
+                        </Button>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      {availableFields.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">
+                          Brak szablonu domyślnego. Utwórz szablon wydatków, aby skonfigurować mapowania.
+                        </p>
+                      ) : (
+                        <div className="border rounded-lg overflow-hidden">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead className="w-[200px]">Kolumna szablonu</TableHead>
+                                <TableHead className="w-[120px]">Typ</TableHead>
+                                <TableHead className="w-[160px]">Tryb</TableHead>
+                                <TableHead>Konfiguracja</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {availableFields.map((col) => {
+                                const cfg = cfgs[col.id] ?? { mode: 'none' };
+                                const isTagGroup = col.type === 'tag_group';
+                                const tagGroupId = col.tagGroupId;
+                                const tagsForGroup = tagGroupId
+                                  ? groups.find((g) => g.id === tagGroupId)?.tags ?? []
+                                  : [];
+
+                                return (
+                                  <TableRow key={col.id}>
+                                    <TableCell className="font-medium text-sm">{col.name}</TableCell>
+                                    <TableCell className="text-xs text-muted-foreground">{col.type}</TableCell>
+                                    <TableCell>
+                                      <Select
+                                        value={cfg.mode ?? 'none'}
+                                        onValueChange={(val) => handleFieldConfigChange(sourceType, col.id, 'mode', val)}
+                                      >
+                                        <SelectTrigger className="h-8 text-xs">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="none">Pomiń</SelectItem>
+                                          <SelectItem value="map">Mapuj pole</SelectItem>
+                                          {isTagGroup && <SelectItem value="auto_tags">Auto-tagi</SelectItem>}
+                                          {isTagGroup && <SelectItem value="select">Wybierz (w edycji)</SelectItem>}
+                                        </SelectContent>
+                                      </Select>
+                                    </TableCell>
+                                    <TableCell>
+                                      {cfg.mode === 'map' && (
+                                        <Select
+                                          value={cfg.sourceField ?? '__none__'}
+                                          onValueChange={(val) => handleFieldConfigChange(sourceType, col.id, 'sourceField', val === '__none__' ? null : val)}
+                                        >
+                                          <SelectTrigger className="h-8 text-xs">
+                                            <SelectValue placeholder="Wybierz pole źródłowe" />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            <SelectItem value="__none__">Brak</SelectItem>
+                                            {fields.map((f) => (
+                                              <SelectItem key={f.id} value={f.id}>{f.label}</SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                      )}
+                                      {cfg.mode === 'auto_tags' && isTagGroup && (
+                                        <div className="flex flex-wrap gap-1.5">
+                                          {tagsForGroup.length === 0 ? (
+                                            <span className="text-xs text-muted-foreground">Brak tagów w tej grupie</span>
+                                          ) : (
+                                            tagsForGroup.map((tag) => {
+                                              const selected = (cfg.autoTagIds ?? []).includes(tag.id);
+                                              return (
+                                                <button
+                                                  key={tag.id}
+                                                  className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs transition-all ${
+                                                    selected
+                                                      ? 'bg-primary/10 text-primary font-medium'
+                                                      : 'text-muted-foreground opacity-50 hover:opacity-80'
+                                                  }`}
+                                                  onClick={() => handleAutoTagToggle(sourceType, col.id, tag.id)}
+                                                >
+                                                  <Tag name={tag.name} color={tag.color} icon={tag.icon} imageUrl={tag.imageUrl} />
+                                                </button>
+                                              );
+                                            })
+                                          )}
+                                        </div>
+                                      )}
+                                      {cfg.mode === 'select' && isTagGroup && (
+                                        <span className="text-xs text-muted-foreground">Użytkownik wybierze tag z tej grupy przy edycji</span>
+                                      )}
+                                      {cfg.mode === 'none' && (
+                                        <span className="text-xs text-muted-foreground">—</span>
+                                      )}
+                                    </TableCell>
+                                  </TableRow>
+                                );
+                              })}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
+
       {/* New Group Dialog */}
       <Dialog open={showNewGroup} onOpenChange={setShowNewGroup}>
-        <DialogContent className="max-w-sm min-h-75 flex flex-col">
+        <DialogContent className="max-w-sm sm:max-w-sm min-h-75 flex flex-col">
           <DialogHeader>
             <DialogTitle>Nowa grupa tagów</DialogTitle>
           </DialogHeader>
@@ -441,7 +827,7 @@ export default function TagsPage() {
           }
         }}
       >
-        <DialogContent className="max-w-lg min-h-75 max-h-[85vh] overflow-hidden flex flex-col">
+        <DialogContent className="min-h-75 max-h-[85vh] overflow-hidden flex flex-col">
           <DialogHeader>
             <DialogTitle>Edycja: {editingGroup?.name}</DialogTitle>
           </DialogHeader>
@@ -499,13 +885,7 @@ export default function TagsPage() {
                       >
                         <GripVertical className="h-3.5 w-3.5 text-muted-foreground cursor-grab shrink-0" />
 
-                        {tag.imageUrl ? (
-                          <img src={tag.imageUrl} alt={tag.name} className="h-6 w-6 rounded-full object-cover shrink-0" />
-                        ) : tag.icon ? (
-                          <span className="text-lg shrink-0 w-6 text-center">{tag.icon}</span>
-                        ) : (
-                          <div className="h-6 w-6 rounded-full shrink-0" style={{ backgroundColor: tag.color }} />
-                        )}
+                        <Tag name={tag.name} color={tag.color} icon={tag.icon} imageUrl={tag.imageUrl} />
 
                         <span className="flex-1 text-sm font-medium truncate">{tag.name}</span>
 

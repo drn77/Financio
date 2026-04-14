@@ -9,6 +9,9 @@ export class BillActionsService {
   private readonly _billInclude = {
     payments: { orderBy: { paidAt: 'desc' as const } },
     tags: { include: { tag: { include: { tagGroup: true } } } },
+    tagBeforePayment: { include: { tagGroup: true } },
+    tagAfterPayment: { include: { tagGroup: true } },
+    savingsGoal: true,
   };
   // #endregion
 
@@ -19,13 +22,17 @@ export class BillActionsService {
     amount: number;
     currency?: string;
     dueDay: number;
+    paymentStartDate: Date;
+    paymentEndDate?: Date | null;
     frequency?: string;
-    categoryId?: string;
     notes?: string;
     paymentType?: string;
     autoCreateExpense?: boolean;
     reminderDays?: number;
     budgetLimit?: number;
+    tagBeforePaymentId?: string;
+    tagAfterPaymentId?: string;
+    savingsGoalId?: string;
     tagIds?: string[];
   }) {
     return this.prisma.bill.create({
@@ -35,13 +42,23 @@ export class BillActionsService {
         amount: input.amount,
         currency: input.currency,
         dueDay: input.dueDay,
+        paymentStartDate: input.paymentStartDate,
+        paymentEndDate: input.paymentEndDate,
         frequency: (input.frequency as any) ?? undefined,
-        categoryId: input.categoryId,
         notes: input.notes,
         paymentType: (input.paymentType as any) ?? undefined,
         autoCreateExpense: input.autoCreateExpense,
         reminderDays: input.reminderDays,
         budgetLimit: input.budgetLimit,
+        tagBeforePayment: input.tagBeforePaymentId
+          ? { connect: { id: input.tagBeforePaymentId } }
+          : undefined,
+        tagAfterPayment: input.tagAfterPaymentId
+          ? { connect: { id: input.tagAfterPaymentId } }
+          : undefined,
+        savingsGoal: input.savingsGoalId
+          ? { connect: { id: input.savingsGoalId } }
+          : undefined,
         tags: input.tagIds?.length
           ? { create: input.tagIds.map((tagId) => ({ tag: { connect: { id: tagId } } })) }
           : undefined,
@@ -97,6 +114,12 @@ export class BillActionsService {
     });
   }
 
+  async findBillPaymentById(paymentId: string, billId: string) {
+    return this.prisma.billPayment.findFirst({
+      where: { id: paymentId, billId },
+    });
+  }
+
   async findBillsByTagId(tagId: string, familyId: string) {
     return this.prisma.bill.findMany({
       where: {
@@ -114,14 +137,18 @@ export class BillActionsService {
     amount?: number;
     currency?: string;
     dueDay?: number;
+    paymentStartDate?: Date;
+    paymentEndDate?: Date | null;
     frequency?: string;
-    categoryId?: string;
     notes?: string;
     isActive?: boolean;
     paymentType?: string;
     autoCreateExpense?: boolean;
     reminderDays?: number;
     budgetLimit?: number;
+    tagBeforePaymentId?: string | null;
+    tagAfterPaymentId?: string | null;
+    savingsGoalId?: string | null;
   }) {
     const data: any = {};
 
@@ -129,14 +156,30 @@ export class BillActionsService {
     if (input.amount !== undefined) data.amount = input.amount;
     if (input.currency !== undefined) data.currency = input.currency;
     if (input.dueDay !== undefined) data.dueDay = input.dueDay;
+    if (input.paymentStartDate !== undefined) data.paymentStartDate = input.paymentStartDate;
+    if (input.paymentEndDate !== undefined) data.paymentEndDate = input.paymentEndDate;
     if (input.frequency !== undefined) data.frequency = input.frequency;
-    if (input.categoryId !== undefined) data.categoryId = input.categoryId;
     if (input.notes !== undefined) data.notes = input.notes;
     if (input.isActive !== undefined) data.isActive = input.isActive;
     if (input.paymentType !== undefined) data.paymentType = input.paymentType;
     if (input.autoCreateExpense !== undefined) data.autoCreateExpense = input.autoCreateExpense;
     if (input.reminderDays !== undefined) data.reminderDays = input.reminderDays;
     if (input.budgetLimit !== undefined) data.budgetLimit = input.budgetLimit;
+    if (input.tagBeforePaymentId !== undefined) {
+      data.tagBeforePayment = input.tagBeforePaymentId
+        ? { connect: { id: input.tagBeforePaymentId } }
+        : { disconnect: true };
+    }
+    if (input.tagAfterPaymentId !== undefined) {
+      data.tagAfterPayment = input.tagAfterPaymentId
+        ? { connect: { id: input.tagAfterPaymentId } }
+        : { disconnect: true };
+    }
+    if (input.savingsGoalId !== undefined) {
+      data.savingsGoal = input.savingsGoalId
+        ? { connect: { id: input.savingsGoalId } }
+        : { disconnect: true };
+    }
 
     return this.prisma.bill.update({
       where: { id, familyId },

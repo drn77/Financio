@@ -53,11 +53,16 @@ model User {
 // ─── Family ───────────────────────────────────────────
 
 model Family {
-  id        String   @id @default(uuid())
-  name      String
-  currency  String   @default("PLN")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String   @id @default(uuid())
+  name        String
+  currency    String   @default("PLN")
+  tagMappings Json?    @default("{}") // Maps app functions to tag IDs: { income?: string, expense?: string, planning?: string, costs?: string, savings?: string }
+  taxConfig   Json?    @default("{}") // Tax calculator config (form, rates, toggles)
+  kanbanConfig Json?   @default("{}") // Kanban board columns and tag mappings
+  dashboardConfig Json? @default("{}") // Dashboard settings (e.g. categoryFieldId)
+  savingsConfig Json?  @default("{}") // Savings tab settings (autoCreateExpense, expenseTagId, templateData)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   members       FamilyMember[]
   categories    Category[]
@@ -70,6 +75,10 @@ model Family {
   stores        Store[]
   budgets       Budget[]
   events        Event[]
+  taxEntries    TaxEntry[]
+  companies          Company[]
+  invoices           Invoice[]
+  recurringInvoices  RecurringInvoice[]
 
   @@map("families")
 }
@@ -136,6 +145,8 @@ model Tag {
 
   tagGroup TagGroup @relation(fields: [tagGroupId], references: [id], onDelete: Cascade)
   billTags BillTag[]
+  beforePaymentBills Bill[] @relation("BillTagBeforePayment")
+  afterPaymentBills Bill[]  @relation("BillTagAfterPayment")
   receiptTags ReceiptTag[]
 
   @@unique([tagGroupId, name])
@@ -166,6 +177,7 @@ model Template {
   description String?
   icon        String?
   columns     Json     // IColumnDefinition[]
+  billingPeriod Json?  // IBillingPeriodConfig – billing period settings
   isDefault   Boolean  @default(false)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -173,6 +185,7 @@ model Template {
   family    Family           @relation(fields: [familyId], references: [id], onDelete: Cascade)
   createdBy User             @relation(fields: [createdById], references: [id])
   records   TemplateRecord[]
+  billingPeriodOverrides BillingPeriodOverride[]
 
   @@map("templates")
 }
@@ -191,6 +204,21 @@ model TemplateRecord {
   @@map("template_records")
 }
 
+// ─── Billing Period Overrides ─────────────────────────
+
+model BillingPeriodOverride {
+  id                String   @id @default(uuid())
+  templateId        String
+  periodStart       DateTime // original period start
+  overrideResetDate DateTime // overridden next reset date
+  createdAt         DateTime @default(now())
+
+  template Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, periodStart])
+  @@map("billing_period_overrides")
+}
+
 // ─── Bills ────────────────────────────────────────────
 
 enum PaymentType {
@@ -206,6 +234,8 @@ model Bill {
   amount            Decimal     @db.Decimal(12, 2)
   currency          String      @default("PLN")
   dueDay            Int         // day of month (1-31)
+  paymentStartDate  DateTime
+  paymentEndDate    DateTime?
   frequency         Frequency   @default(MONTHLY)
   categoryId        String?
   notes             String?
@@ -214,12 +244,18 @@ model Bill {
   autoCreateExpense Boolean     @default(false)
   reminderDays      Int         @default(3) // days before due to remind
   budgetLimit       Decimal?    @db.Decimal(12, 2) // alert threshold
+  tagBeforePaymentId String?
+  tagAfterPaymentId  String?
+  savingsGoalId      String?
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt
 
   family   Family        @relation(fields: [familyId], references: [id], onDelete: Cascade)
   payments BillPayment[]
   tags     BillTag[]
+  tagBeforePayment Tag? @relation("BillTagBeforePayment", fields: [tagBeforePaymentId], references: [id], onDelete: SetNull)
+  tagAfterPayment  Tag? @relation("BillTagAfterPayment", fields: [tagAfterPaymentId], references: [id], onDelete: SetNull)
+  savingsGoal      SavingsGoal? @relation(fields: [savingsGoalId], references: [id], onDelete: SetNull)
 
   @@map("bills")
 }
@@ -266,6 +302,11 @@ model Receipt {
   personId    String?
   imageUrl    String?
   notes       String?
+  configurableFields Json? @default("{}") @map("configurable_fields")
+  ocrStatus   ReceiptOcrStatus @default(COMPLETED)
+  ocrError    String?
+  isApproved  Boolean  @default(false)
+  approvedAt  DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -277,6 +318,12 @@ model Receipt {
 
   @@index([familyId, date])
   @@map("receipts")
+}
+
+enum ReceiptOcrStatus {
+  PENDING
+  COMPLETED
+  FAILED
 }
 
 model ReceiptItem {
@@ -368,14 +415,20 @@ model FixedExpense {
   dayOfMonth Int?
   startDate  DateTime
   endDate    DateTime?
+  nextDueDate DateTime?
+  lastPaidAt  DateTime?
   categoryId String?
   personId   String?
+  paymentTagId String?
+  paymentTemplateData Json? // Additional template-record payload to merge on "Pay"
   notes      String?
+  savingsGoalId String?
   isActive   Boolean   @default(true)
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
-  family Family @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  family      Family       @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  savingsGoal SavingsGoal? @relation(fields: [savingsGoalId], references: [id], onDelete: SetNull)
 
   @@map("fixed_expenses")
 }
@@ -391,11 +444,16 @@ model SavingsGoal {
   deadline     DateTime?
   icon         String?
   color        String    @default("#2ECC71")
+  autoCreateExpense Boolean @default(false)
+  paymentTagId String?
+  paymentTemplateData Json?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
   family   Family           @relation(fields: [familyId], references: [id], onDelete: Cascade)
   deposits SavingsDeposit[]
+  bills    Bill[]
+  fixedExpenses FixedExpense[]
 
   @@map("savings_goals")
 }
@@ -459,6 +517,7 @@ model Event {
   todos     EventTodo[]
   notes     EventNote[]
   expenses  EventExpense[]
+  splits    Split[]
 
   @@index([familyId, startDate])
   @@map("events")
@@ -536,4 +595,318 @@ model EventExpense {
 
   @@index([eventId])
   @@map("event_expenses")
+}
+
+// ─── Tax Entries ──────────────────────────────────────
+
+model TaxEntry {
+  id               String    @id @default(uuid())
+  familyId         String
+  type             String    // ZUS, PIT, VAT_9M, CUSTOM
+  name             String    // Display name
+  month            Int       // 1-12
+  year             Int
+  calculatedAmount Decimal?  @db.Decimal(12, 2)
+  amount           Decimal   @db.Decimal(12, 2)
+  isPaid           Boolean   @default(false)
+  paidAt           DateTime?
+  notes            String?
+  isRecurring      Boolean   @default(false)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  family Family @relation(fields: [familyId], references: [id], onDelete: Cascade)
+
+  @@unique([familyId, type, month, year, name])
+  @@index([familyId, month, year])
+  @@map("tax_entries")
+}
+
+// ─── Companies (Kontrahenci) ──────────────────────────
+
+model Company {
+  id          String   @id @default(uuid())
+  familyId    String
+  name        String
+  nip         String?
+  regon       String?
+  address     String?
+  city        String?
+  postalCode  String?
+  country     String   @default("Polska")
+  email       String?
+  phone       String?
+  bankName    String?
+  bankAccount String?
+  isOwn       Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  family           Family    @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  invoicesAsSeller    Invoice[]          @relation("InvoiceSeller")
+  invoicesAsBuyer     Invoice[]          @relation("InvoiceBuyer")
+  recurringAsSeller   RecurringInvoice[] @relation("RecurringSeller")
+  recurringAsBuyer    RecurringInvoice[] @relation("RecurringBuyer")
+
+  @@unique([familyId, name])
+  @@index([familyId])
+  @@map("companies")
+}
+
+// ─── Invoices (Faktury) ───────────────────────────────
+
+model Invoice {
+  id            String   @id @default(uuid())
+  familyId      String
+  number        String
+  type          String   @default("STANDARD") // STANDARD, PROFORMA, CORRECTION, ADVANCE, VAT_EXEMPT
+  status        String   @default("DRAFT")    // DRAFT, ISSUED, SENT, PAID, OVERDUE, CANCELLED
+  title         String?                       // Custom invoice title
+  issuePlace    String?                       // Place of issue (Miejsce wystawienia)
+
+  issueDate     DateTime
+  saleDate      DateTime
+  dueDate       DateTime
+
+  sellerId      String
+  buyerId       String
+
+  paymentMethod String   @default("przelew")
+  bankAccount   String?
+  currency      String   @default("PLN")
+
+  // Multi-currency support
+  exchangeRate    Decimal? @db.Decimal(10, 4) // NBP exchange rate at issue date
+  exchangeCurrency String?                    // Original currency if converted
+
+  totalNet      Decimal  @db.Decimal(12, 2) @default(0)
+  totalVat      Decimal  @db.Decimal(12, 2) @default(0)
+  totalGross    Decimal  @db.Decimal(12, 2) @default(0)
+
+  isPaid        Boolean  @default(false)
+  paidAt        DateTime?
+  paidAmount    Decimal? @db.Decimal(12, 2)
+
+  correctedInvoiceId String?
+  notes         String?
+
+  // Email sending
+  sentAt        DateTime?
+  sentTo        String?
+
+  // Recurring invoice source
+  recurringInvoiceId String?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  family             Family             @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  seller             Company            @relation("InvoiceSeller", fields: [sellerId], references: [id])
+  buyer              Company            @relation("InvoiceBuyer", fields: [buyerId], references: [id])
+  correctedInvoice   Invoice?           @relation("InvoiceCorrection", fields: [correctedInvoiceId], references: [id])
+  corrections        Invoice[]          @relation("InvoiceCorrection")
+  items              InvoiceItem[]
+  auditLogs          InvoiceAuditLog[]
+  recurringInvoice   RecurringInvoice?  @relation(fields: [recurringInvoiceId], references: [id])
+
+  @@unique([familyId, number])
+  @@index([familyId, status])
+  @@index([familyId, issueDate])
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id          String  @id @default(uuid())
+  invoiceId   String
+  sortOrder   Int     @default(0)
+  description String
+  unit        String  @default("usł.")
+  quantity    Decimal @db.Decimal(12, 4)
+  unitPrice   Decimal @db.Decimal(12, 2)
+  vatRate     String  @default("23") // 23, 8, 5, 0, zw, np
+  netAmount   Decimal @db.Decimal(12, 2)
+  vatAmount   Decimal @db.Decimal(12, 2)
+  grossAmount Decimal @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_items")
+}
+
+// ─── Recurring Invoices (Faktury cykliczne) ───────────
+
+model RecurringInvoice {
+  id            String   @id @default(uuid())
+  familyId      String
+  name          String   // e.g. "Abonament Firma X"
+  isActive      Boolean  @default(true)
+
+  frequency     Frequency @default(MONTHLY) // DAILY, WEEKLY, MONTHLY, QUARTERLY, YEARLY
+  nextIssueDate DateTime
+  lastIssuedAt  DateTime?
+
+  // Invoice template data
+  type          String   @default("STANDARD")
+  sellerId      String
+  buyerId       String
+  paymentMethod String   @default("przelew")
+  bankAccount   String?
+  currency      String   @default("PLN")
+  dueDays       Int      @default(14)  // Days after issue for payment
+  notes         String?
+  autoIssue     Boolean  @default(false) // Automatically issue (not just draft)
+  autoSend      Boolean  @default(false) // Auto-send email on issue
+
+  // Template items stored as JSON
+  itemsTemplate Json     @default("[]") // Array of { description, unit, quantity, unitPrice, vatRate }
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  family        Family    @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  seller        Company   @relation("RecurringSeller", fields: [sellerId], references: [id])
+  buyer         Company   @relation("RecurringBuyer", fields: [buyerId], references: [id])
+  invoices      Invoice[] // Generated invoices
+
+  @@index([familyId, isActive])
+  @@index([nextIssueDate])
+  @@map("recurring_invoices")
+}
+
+// ─── Invoice Audit Log (Historia zmian) ───────────────
+
+model InvoiceAuditLog {
+  id         String   @id @default(uuid())
+  invoiceId  String
+  action     String   // CREATED, UPDATED, ISSUED, SENT, PAID, CANCELLED, CORRECTED, DELETED
+  changes    Json?    // { field: { old, new } }
+  userId     String?
+  userName   String?
+  createdAt  DateTime @default(now())
+
+  invoice    Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_audit_logs")
+}
+
+// ─── Split (Expense Splitting) ────────────────────────
+
+enum SplitStatus {
+  ACTIVE
+  SETTLED
+  ARCHIVED
+}
+
+model Split {
+  id          String      @id @default(uuid())
+  eventId     String
+  inviteCode  String      @unique // 8-char nanoid for share links
+  name        String
+  currency    String      @default("PLN")
+  status      SplitStatus @default(ACTIVE)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  event        Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  participants SplitParticipant[]
+  messages     SplitMessage[]
+  receipts     SplitReceipt[]
+
+  @@index([eventId])
+  @@index([inviteCode])
+  @@map("splits")
+}
+
+model SplitParticipant {
+  id         String   @id @default(uuid())
+  splitId    String
+  userId     String?  // null for guest participants
+  nickname   String
+  email      String?
+  guestToken String?  @unique // auth token for guests (nanoid 32)
+  isAdmin    Boolean  @default(false)
+  isSettled  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  split    Split             @relation(fields: [splitId], references: [id], onDelete: Cascade)
+  messages SplitMessage[]
+  claims   SplitItemClaim[]
+  paidReceipts SplitReceipt[] @relation("SplitReceiptPaidBy")
+
+  @@unique([splitId, userId]) // one participation per user per split
+  @@index([splitId])
+  @@index([guestToken])
+  @@map("split_participants")
+}
+
+model SplitMessage {
+  id             String   @id @default(uuid())
+  splitId        String
+  participantId  String
+  content        String?  @db.Text // text content (null for receipt-only messages)
+  type           String   @default("TEXT") // TEXT or RECEIPT
+  splitReceiptId String?  // link to receipt if type=RECEIPT
+  createdAt      DateTime @default(now())
+
+  split       Split            @relation(fields: [splitId], references: [id], onDelete: Cascade)
+  participant SplitParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  @@index([splitId, createdAt])
+  @@map("split_messages")
+}
+
+model SplitReceipt {
+  id                  String   @id @default(uuid())
+  splitId             String
+  uploadedByParticipantId String
+  paidByParticipantId String
+  imageUrl            String?  @db.Text
+  storeName           String?
+  totalAmount         Decimal  @db.Decimal(12, 2)
+  isConfirmed         Boolean  @default(false)
+  ocrRawText          String?  @db.Text
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  split       Split            @relation(fields: [splitId], references: [id], onDelete: Cascade)
+  paidBy      SplitParticipant @relation("SplitReceiptPaidBy", fields: [paidByParticipantId], references: [id])
+  items       SplitReceiptItem[]
+
+  @@index([splitId])
+  @@map("split_receipts")
+}
+
+model SplitReceiptItem {
+  id              String  @id @default(uuid())
+  splitReceiptId  String
+  name            String
+  quantity        Decimal @db.Decimal(10, 3) @default(1)
+  unitPrice       Decimal @db.Decimal(12, 2)
+  total           Decimal @db.Decimal(12, 2)
+  sortOrder       Int     @default(0)
+
+  splitReceipt SplitReceipt   @relation(fields: [splitReceiptId], references: [id], onDelete: Cascade)
+  claims       SplitItemClaim[]
+
+  @@index([splitReceiptId])
+  @@map("split_receipt_items")
+}
+
+model SplitItemClaim {
+  id                  String @id @default(uuid())
+  splitReceiptItemId  String
+  participantId       String
+  createdAt           DateTime @default(now())
+
+  splitReceiptItem SplitReceiptItem @relation(fields: [splitReceiptItemId], references: [id], onDelete: Cascade)
+  participant      SplitParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  @@unique([splitReceiptItemId, participantId]) // one claim per participant per item
+  @@index([splitReceiptItemId])
+  @@map("split_item_claims")
 }

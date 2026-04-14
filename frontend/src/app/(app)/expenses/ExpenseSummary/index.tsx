@@ -1,6 +1,7 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { DollarSign, TrendingUp, Hash, PieChart } from 'lucide-react';
 
@@ -21,6 +22,8 @@ function formatPLN(amount: number): string {
 }
 
 export function ExpenseSummary({ records, categories }: Props) {
+  const [showAllCategories, setShowAllCategories] = useState(false);
+
   const stats = useMemo(() => {
     let totalAmount = 0;
     let paidCount = 0;
@@ -56,8 +59,7 @@ export function ExpenseSummary({ records, categories }: Props) {
 
     const topCategories = Object.entries(byCategory)
       .map(([name, data]) => ({ name, ...data }))
-      .sort((a, b) => b.amount - a.amount)
-      .slice(0, 5);
+      .sort((a, b) => b.amount - a.amount);
 
     return {
       totalAmount,
@@ -71,10 +73,14 @@ export function ExpenseSummary({ records, categories }: Props) {
 
   if (records.length === 0) return null;
 
+  const visibleCategories = showAllCategories
+    ? stats.topCategories
+    : stats.topCategories.slice(0, 3);
+
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
       <Card>
-        <CardContent className="flex items-center gap-3 p-4">
+        <CardContent className="flex items-center gap-3 px-4">
           <div className="rounded-lg bg-primary/10 p-2">
             <DollarSign className="h-5 w-5 text-primary" />
           </div>
@@ -86,7 +92,7 @@ export function ExpenseSummary({ records, categories }: Props) {
       </Card>
 
       <Card>
-        <CardContent className="flex items-center gap-3 p-4">
+        <CardContent className="flex items-center gap-3 px-4">
           <div className="rounded-lg bg-blue-500/10 p-2">
             <TrendingUp className="h-5 w-5 text-blue-500" />
           </div>
@@ -98,7 +104,7 @@ export function ExpenseSummary({ records, categories }: Props) {
       </Card>
 
       <Card>
-        <CardContent className="flex items-center gap-3 p-4">
+        <CardContent className="flex items-center gap-3 px-4">
           <div className="rounded-lg bg-green-500/10 p-2">
             <Hash className="h-5 w-5 text-green-500" />
           </div>
@@ -113,7 +119,7 @@ export function ExpenseSummary({ records, categories }: Props) {
       </Card>
 
       <Card>
-        <CardContent className="p-4">
+        <CardContent className="px-4">
           <div className="flex items-center gap-2 mb-2">
             <div className="rounded-lg bg-purple-500/10 p-2">
               <PieChart className="h-5 w-5 text-purple-500" />
@@ -124,7 +130,7 @@ export function ExpenseSummary({ records, categories }: Props) {
             {stats.topCategories.length === 0 && (
               <p className="text-xs text-muted-foreground">Brak</p>
             )}
-            {stats.topCategories.map((cat) => (
+            {visibleCategories.map((cat) => (
               <div key={cat.name} className="flex items-center justify-between text-xs">
                 <span className="flex items-center gap-1.5 truncate">
                   <span
@@ -136,6 +142,16 @@ export function ExpenseSummary({ records, categories }: Props) {
                 <span className="font-medium shrink-0 ml-2">{formatPLN(cat.amount)}</span>
               </div>
             ))}
+            {stats.topCategories.length > 3 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-auto px-0 py-1 text-xs text-primary hover:bg-transparent hover:text-primary/80"
+                onClick={() => setShowAllCategories((prev) => !prev)}
+              >
+                {showAllCategories ? 'Pokaż mniej' : `Pokaż wszystkie (${stats.topCategories.length})`}
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>

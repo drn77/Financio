@@ -13,6 +13,12 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { Tag } from '@/components/Tag';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 import { ArrowLeft, Plus, Trash2, Save, Download } from 'lucide-react';
 import Link from 'next/link';
 
@@ -27,11 +33,16 @@ interface IColumn {
   options?: string[];
   defaultBehavior?: string;
   currencies?: string[];
+  colorFieldByTag?: string;
+  colorRowByTag?: boolean;
+  allowMultiple?: boolean;
+  tagGroupId?: string;
+  defaultTagId?: string;
 }
 
-function CellEditor({ col, value, onChange, categories, members }: {
+function CellEditor({ col, value, onChange, categories, members, tagGroups }: {
   col: IColumn; value: any; onChange: (v: any) => void;
-  categories: any[]; members: any[];
+  categories: any[]; members: any[]; tagGroups: any[];
 }) {
   switch (col.type) {
     case 'date':
@@ -61,22 +72,75 @@ function CellEditor({ col, value, onChange, categories, members }: {
           </UISelect>
         </div>
       );
-    case 'tags':
+    case 'tag_group': {
+      const group = tagGroups.find((g: any) => g.id === col.tagGroupId);
+      const availableTags: any[] = group?.tags ?? [];
+      const tags: string[] = Array.isArray(value) ? value : [];
+      const allowMultiple = col.allowMultiple !== false;
+
+      const toggleTag = (tagName: string) => {
+        const arr = Array.isArray(value) ? [...value] : [];
+        if (arr.includes(tagName)) {
+          onChange(arr.filter((t: string) => t !== tagName));
+        } else {
+          if (allowMultiple) {
+            onChange([...arr, tagName]);
+          } else {
+            onChange([tagName]);
+          }
+        }
+      };
+
       return (
-        <div className="flex flex-wrap gap-1">
-          {categories.map((cat) => (
-            <Badge key={cat.id} variant={Array.isArray(value) && value.includes(cat.name) ? 'default' : 'outline'}
-              className="text-xs cursor-pointer"
-              onClick={() => {
-                const arr = Array.isArray(value) ? [...value] : [];
-                if (arr.includes(cat.name)) onChange(arr.filter((t: string) => t !== cat.name));
-                else onChange([...arr, cat.name]);
-              }}>
-              {cat.name}
-            </Badge>
-          ))}
-        </div>
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="flex flex-wrap gap-1 items-center min-h-[32px] w-full rounded-md px-2 py-1 text-xs border border-input bg-transparent hover:bg-accent/50 cursor-pointer text-left"
+            >
+              {tags.length === 0 ? (
+                <span className="text-muted-foreground">Wybierz...</span>
+              ) : (
+                tags.map((tag) => {
+                  const tagData = availableTags.find((t: any) => t.name === tag);
+                  return (
+                    <Tag
+                      key={tag}
+                      name={tag}
+                      color={tagData?.color}
+                      icon={tagData?.icon}
+                      className="pointer-events-none"
+                    />
+                  );
+                })
+              )}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-52 p-1" align="start">
+            <div className="max-h-48 overflow-y-auto">
+              {availableTags.length === 0 ? (
+                <p className="text-xs text-muted-foreground p-2 text-center">Brak tagów w grupie</p>
+              ) : (
+                availableTags.map((t: any) => {
+                  const isSelected = tags.includes(t.name);
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className={`flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded-sm hover:bg-accent cursor-pointer text-left ${isSelected ? 'bg-accent/60 font-medium' : ''}`}
+                      onClick={() => toggleTag(t.name)}
+                    >
+                      <Tag name={t.name} color={t.color} icon={t.icon} className="pointer-events-none" />
+                      {isSelected && <span className="text-primary">✓</span>}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </PopoverContent>
+        </Popover>
       );
+    }
     case 'person':
       return (
         <UISelect value={value ?? ''} onValueChange={onChange}>
@@ -97,6 +161,7 @@ export default function TemplateDataPage({ params }: { params: Promise<{ id: str
   const [records, setRecords] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
   const [members, setMembers] = useState<any[]>([]);
+  const [tagGroups, setTagGroups] = useState<any[]>([]);
   const [dirty, setDirty] = useState<Set<string>>(new Set());
   const [deleted, setDeleted] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -104,16 +169,18 @@ export default function TemplateDataPage({ params }: { params: Promise<{ id: str
 
   const load = useCallback(async () => {
     try {
-      const [tpl, recs, cats, mems] = await Promise.all([
+      const [tpl, recs, cats, mems, tGroups] = await Promise.all([
         api.getTemplate(id),
         api.getRecords(id),
         api.getCategories(),
         api.getFamilyMembers().catch(() => []),
+        api.getTagGroups().catch(() => []),
       ]);
       setTemplate(tpl);
       setRecords(Array.isArray(recs) ? recs.map((r: any) => ({ ...r, _isNew: false })) : (recs as any)?.records?.map((r: any) => ({ ...r, _isNew: false })) ?? []);
       setCategories(Array.isArray(cats) ? cats : []);
       setMembers(Array.isArray(mems) ? mems : []);
+      setTagGroups(Array.isArray(tGroups) ? tGroups : []);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   }, [id]);
@@ -223,21 +290,48 @@ export default function TemplateDataPage({ params }: { params: Promise<{ id: str
           <tbody>
             {records.length === 0 ? (
               <tr><td colSpan={columns.length + 2} className="text-center py-8 text-muted-foreground">Brak wierszy</td></tr>
-            ) : records.map((rec, idx) => (
-              <tr key={rec.id} className={`border-t ${dirty.has(rec.id) ? 'bg-primary/5' : 'hover:bg-muted/30'}`}>
+            ) : records.map((rec, idx) => {
+              // Build tag color lookup from tagGroups
+              const findTagColor = (tagName: string) => {
+                for (const g of tagGroups) {
+                  const t = (g.tags ?? []).find((t: any) => t.name === tagName);
+                  if (t?.color) return t.color;
+                }
+                return categories.find((c: any) => c.name === tagName)?.color;
+              };
+              // Row coloring from colorRowByTag column
+              const colorRowCol = columns.find(c => c.colorRowByTag);
+              let rowBgColor: string | undefined;
+              if (colorRowCol) {
+                const rowTags = Array.isArray(rec.data?.[colorRowCol.id]) ? rec.data[colorRowCol.id] as string[] : [];
+                const tagColor = rowTags.length > 0 ? findTagColor(rowTags[0]) : undefined;
+                if (tagColor) rowBgColor = `${tagColor}15`;
+              }
+              return (
+              <tr key={rec.id} className={`border-t ${dirty.has(rec.id) ? 'bg-primary/5' : 'hover:bg-muted/30'}`} style={rowBgColor ? { backgroundColor: rowBgColor } : undefined}>
                 <td className="p-2 text-xs text-muted-foreground">{idx + 1}</td>
-                {columns.map((col) => (
-                  <td key={col.id} className="p-1">
-                    <CellEditor col={col} value={rec.data?.[col.id]} onChange={(v) => updateCell(rec.id, col.id, v)} categories={categories} members={members} />
+                {columns.map((col) => {
+                  // Cell coloring from colorFieldByTag
+                  let cellBgColor: string | undefined;
+                  if (col.colorFieldByTag) {
+                    const refTags = Array.isArray(rec.data?.[col.colorFieldByTag]) ? rec.data[col.colorFieldByTag] as string[] : [];
+                    const tagColor = refTags.length > 0 ? findTagColor(refTags[0]) : undefined;
+                    if (tagColor) cellBgColor = `${tagColor}20`;
+                  }
+                  return (
+                  <td key={col.id} className="p-1" style={cellBgColor ? { backgroundColor: cellBgColor } : undefined}>
+                    <CellEditor col={col} value={rec.data?.[col.id]} onChange={(v) => updateCell(rec.id, col.id, v)} categories={categories} members={members} tagGroups={tagGroups} />
                   </td>
-                ))}
+                  );
+                })}
                 <td className="p-1">
                   <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => removeRow(rec.id)}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>

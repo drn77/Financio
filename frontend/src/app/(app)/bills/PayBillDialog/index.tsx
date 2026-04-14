@@ -60,7 +60,7 @@ export function PayBillDialog({ open, onOpenChange, bill, onSubmit, isSubmitting
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <CreditCard className="h-5 w-5" />
-            Opłać rachunek — {bill.name}
+            Opłać cykliczny wydatek — {bill.name}
           </DialogTitle>
         </DialogHeader>
 

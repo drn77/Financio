@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, IsDateString, IsArray, ValidateNested, IsBoolean } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsDateString, IsArray, ValidateNested, IsBoolean, IsIn, IsObject } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ReceiptItemDto } from './create-receipt.dto';
 
@@ -44,6 +44,10 @@ export class UpdateReceiptDto {
   notes?: string;
 
   @IsOptional()
+  @IsObject()
+  configurableFields?: Record<string, unknown>;
+
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => ReceiptItemDto)
@@ -53,4 +57,20 @@ export class UpdateReceiptDto {
   @IsArray()
   @IsString({ each: true })
   tagIds?: string[];
+
+  @IsOptional()
+  @IsIn(['PENDING', 'COMPLETED', 'FAILED'])
+  ocrStatus?: 'PENDING' | 'COMPLETED' | 'FAILED';
+
+  @IsOptional()
+  @IsString()
+  ocrError?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isApproved?: boolean;
+
+  @IsOptional()
+  @IsDateString()
+  approvedAt?: string;
 }

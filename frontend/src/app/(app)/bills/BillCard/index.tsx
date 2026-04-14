@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
+import { Tag } from '@/components/Tag';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,7 +30,6 @@ import {
   Building2,
 } from 'lucide-react';
 import type { IBill, BillStatus, PaymentType } from '../model';
-import type { ICategory } from '@shared/models';
 import {
   STATUS_LABELS,
   STATUS_COLORS,
@@ -40,7 +40,6 @@ import { formatPLN, getDaysUntilDue } from '../utils';
 
 interface Props {
   bill: IBill;
-  categories?: ICategory[];
   onPay: (bill: IBill) => void;
   onEdit: (bill: IBill) => void;
   onDelete: (bill: IBill) => void;
@@ -54,7 +53,7 @@ const PAYMENT_TYPE_ICONS: Record<PaymentType, React.ReactNode> = {
   DIRECT_DEBIT: <Building2 className="h-3.5 w-3.5" />,
 };
 
-export function BillCard({ bill, categories, onPay, onEdit, onDelete, onViewHistory, onToggleActive }: Props) {
+export function BillCard({ bill, onPay, onEdit, onDelete, onViewHistory, onToggleActive }: Props) {
   const status = (bill.status ?? 'UPCOMING') as BillStatus;
   const daysUntil = getDaysUntilDue(bill.dueDay);
   const isPaid = status === 'PAID';
@@ -174,20 +173,6 @@ export function BillCard({ bill, categories, onPay, onEdit, onDelete, onViewHist
           </span>
         </div>
 
-        {/* Category display */}
-        {bill.categoryId && categories && (() => {
-          const cat = categories.find((c) => c.id === bill.categoryId);
-          return cat ? (
-            <div className="flex items-center gap-1.5 text-sm">
-              <span
-                className="inline-block h-2.5 w-2.5 rounded-full"
-                style={{ backgroundColor: cat.color }}
-              />
-              <span className="text-muted-foreground">{cat.name}</span>
-            </div>
-          ) : null;
-        })()}
-
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Clock className="h-3.5 w-3.5" />
           <span>
@@ -203,7 +188,7 @@ export function BillCard({ bill, categories, onPay, onEdit, onDelete, onViewHist
 
         {budgetExceeded && (
           <div className="flex items-center gap-1.5 rounded-md bg-amber-50 p-2 text-xs text-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
-            <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
             <span>
               Kwota przekracza limit {formatPLN(bill.budgetLimit!)} o{' '}
               {formatPLN(bill.amount - bill.budgetLimit!)}
@@ -229,14 +214,7 @@ export function BillCard({ bill, categories, onPay, onEdit, onDelete, onViewHist
         {bill.tags.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {bill.tags.map((tag) => (
-              <Badge
-                key={tag.id}
-                variant="outline"
-                className="text-xs"
-                style={{ borderColor: tag.color, color: tag.color }}
-              >
-                {tag.name}
-              </Badge>
+              <Tag key={tag.id} name={tag.name} color={tag.color} icon={tag.icon} groupName={tag.groupName} />
             ))}
           </div>
         )}
@@ -247,7 +225,7 @@ export function BillCard({ bill, categories, onPay, onEdit, onDelete, onViewHist
 
         {isPartiallyPaid && bill.remainingAmount != null && (
           <div className="flex items-center gap-1.5 rounded-md bg-orange-50 p-2 text-xs text-orange-700 dark:bg-orange-900/20 dark:text-orange-400">
-            <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
             <span>
               Wpłacono {formatPLN(bill.paidAmount ?? 0)} z {formatPLN(bill.amount)} — brakuje{' '}
               {formatPLN(bill.remainingAmount)}

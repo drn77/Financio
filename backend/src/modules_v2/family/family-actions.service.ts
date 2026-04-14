@@ -75,7 +75,34 @@ export class FamilyActionsService {
   }
   // #endregion
 
+  // #region Read (config)
+  async getDashboardConfig(familyId: string): Promise<Record<string, any>> {
+    const family = await this.prisma.family.findUnique({
+      where: { id: familyId },
+      select: { dashboardConfig: true },
+    });
+    return ((family?.dashboardConfig as any) ?? {}) as Record<string, any>;
+  }
+  // #endregion
+
   // #region Update
+  async updateTagMappings(
+    familyId: string,
+    tagMappings: { income?: string; expense?: string; planning?: string; costs?: string; savings?: string },
+  ) {
+    return this.prisma.family.update({
+      where: { id: familyId },
+      data: { tagMappings: tagMappings as any },
+      select: { tagMappings: true },
+    });
+  }
+
+  async updateDashboardConfig(familyId: string, config: Record<string, any>) {
+    return this.prisma.family.update({
+      where: { id: familyId },
+      data: { dashboardConfig: config as any },
+    });
+  }
   // #endregion
 
   // #region Delete

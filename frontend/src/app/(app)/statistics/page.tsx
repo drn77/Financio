@@ -2,7 +2,15 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '@/lib/api';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   Select,
   SelectContent,
@@ -12,9 +20,11 @@ import {
 } from '@/components/ui/select';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  PieChart, Pie, Cell, ResponsiveContainer, Legend,
+  ResponsiveContainer, Cell,
   LineChart, Line,
 } from 'recharts';
+import { Eye, EyeOff } from 'lucide-react';
+import { PeriodHistory } from '../expenses/PeriodHistory';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -23,68 +33,181 @@ function formatPLN(amount: number) {
 }
 
 const COLORS = ['#2ECC71', '#3498DB', '#F1C40F', '#9B59B6', '#E67E22', '#E74C3C', '#1ABC9C', '#34495E'];
+const HISTORY_PAGE_SIZE = 12;
+
+function paginate<T>(items: T[], page: number, pageSize: number) {
+  const start = (page - 1) * pageSize;
+  return items.slice(start, start + pageSize);
+}
 
 export default function StatisticsPage() {
-  const [data, setData] = useState<any>(null);
+  const [stats, setStats] = useState<any>(null);
+  const [dashboardConfig, setDashboardConfig] = useState<any>(null);
+  const [periodTemplateId, setPeriodTemplateId] = useState<string | null>(null);
+  const [taxByMonth, setTaxByMonth] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
-  const [period, setPeriod] = useState('current');
+  const [loadingConfig, setLoadingConfig] = useState(false);
+  const [showIncomeHistory, setShowIncomeHistory] = useState(false);
+  const [showExpenseHistory, setShowExpenseHistory] = useState(false);
+  const [incomePage, setIncomePage] = useState(1);
+  const [expensePage, setExpensePage] = useState(1);
+  const [seriesVisibility, setSeriesVisibility] = useState({
+    income: true,
+    expenses: true,
+    balance: true,
+    savings: true,
+    taxes: true,
+  });
 
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const d = await api.getDashboard();
-      setData(d);
-    } catch { setData(null); }
+      const [statisticsData, config, defaultTemplate] = await Promise.all([
+        api.getDashboardStatistics(),
+        api.getDashboardConfig(),
+        api.getDefaultTemplate().catch(() => null),
+      ]);
+
+      setStats(statisticsData);
+      setDashboardConfig(config);
+      setPeriodTemplateId(defaultTemplate?.billingPeriod?.type ? defaultTemplate.id : null);
+
+      const months: Array<{ year: number; month: number; monthKey: string }> = statisticsData?.months ?? [];
+      if (months.length > 0) {
+        const taxEntries = await Promise.all(
+          months.map(async (monthInfo) => {
+            try {
+              const taxSummary = await api.getTaxSummary(monthInfo.month, monthInfo.year);
+              return [monthInfo.monthKey, Number(taxSummary?.monthly?.total ?? 0)] as const;
+            } catch {
+              return [monthInfo.monthKey, 0] as const;
+            }
+          }),
+        );
+
+        const taxMap: Record<string, number> = {};
+        for (const [monthKey, value] of taxEntries) taxMap[monthKey] = value;
+        setTaxByMonth(taxMap);
+      } else {
+        setTaxByMonth({});
+      }
+    } catch {
+      setStats(null);
+      setDashboardConfig(null);
+      setPeriodTemplateId(null);
+      setTaxByMonth({});
+    }
     finally { setLoading(false); }
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  const onCategoryFieldChange = useCallback(async (value: string) => {
+    if (!dashboardConfig) return;
+    setLoadingConfig(true);
+    try {
+      await api.updateDashboardConfig({ categoryFieldId: value === '__none' ? null : value });
+      await loadData();
+    } finally {
+      setLoadingConfig(false);
+    }
+  }, [dashboardConfig, loadData]);
+
   if (loading) {
     return <div className="flex h-[50vh] items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" /></div>;
   }
 
-  if (!data) {
+  if (!stats) {
     return <div className="text-center py-8 text-muted-foreground">Brak danych do wyświetlenia</div>;
   }
 
-  const categoryData = Object.entries(data.expensesByCategory ?? {}).map(([name, value]) => ({
-    name,
-    value: Number(value),
-  })).sort((a, b) => b.value - a.value);
+  const months = (stats.months ?? []) as any[];
+  const categoryData = (stats.categoryTotals ?? []).map((item: any) => ({
+    name: String(item.name),
+    value: Number(item.amount ?? 0),
+  }));
 
-  const personData = Object.entries(data.expensesByPerson ?? {}).map(([name, value]) => ({
-    name,
-    value: Number(value),
-  })).sort((a, b) => b.value - a.value);
+  const averageIncome = Number(stats.averageIncome ?? 0);
+  const averageExpenses = Number(stats.averageExpenses ?? 0);
+  const averageBalance = Number(stats.averageBalance ?? 0);
+  const averageSavings = Number(stats.averageSavings ?? 0);
+  const averageSavingsRate = Number(stats.averageSavingsRate ?? 0);
+  const medianMonthlyExpenses = Number(stats.medianMonthlyExpenses ?? 0);
+  const incomeStdDev = Number(stats.incomeStdDev ?? 0);
+  const expensesStdDev = Number(stats.expensesStdDev ?? 0);
+  const balanceForecast = {
+    nextMonth: Number(stats.balanceForecast?.nextMonth ?? 0),
+    inTwoMonths: Number(stats.balanceForecast?.inTwoMonths ?? 0),
+    inThreeMonths: Number(stats.balanceForecast?.inThreeMonths ?? 0),
+  };
+  const topGrowthCategories = (stats.topGrowthCategories ?? []) as Array<{
+    category: string;
+    currentAmount: number;
+    previousAmount: number;
+    delta: number;
+    growthRate: number;
+  }>;
+  const fixedVsVariable = {
+    fixedAmount: Number(stats.fixedVsVariable?.fixedAmount ?? 0),
+    variableAmount: Number(stats.fixedVsVariable?.variableAmount ?? 0),
+    fixedShare: Number(stats.fixedVsVariable?.fixedShare ?? 0),
+    variableShare: Number(stats.fixedVsVariable?.variableShare ?? 0),
+  };
+  const savingsEffectiveness = {
+    averageEffectiveness: Number(stats.savingsEffectiveness?.averageEffectiveness ?? 0),
+    monthly: (stats.savingsEffectiveness?.monthly ?? []) as Array<{
+      monthKey: string;
+      monthLabel: string;
+      planned: number;
+      actual: number;
+      effectiveness: number;
+    }>,
+  };
 
-  const totalExpenses = categoryData.reduce((s, d) => s + d.value, 0);
-  const totalIncome = Number(data.monthlyIncome ?? 0);
-  const savingsRate = totalIncome > 0 ? ((totalIncome - totalExpenses) / totalIncome * 100) : 0;
+  const taxSeries = ((stats?.series ?? []) as any[]).map((point) => {
+    const tax = Number(taxByMonth[point.monthKey] ?? 0);
+    return {
+      ...point,
+      taxes: tax,
+    };
+  });
 
-  // Trend data (mock based on current month for MVP)
-  const trendData = [
-    { month: 'Sty', wydatki: totalExpenses * 0.85, przychody: totalIncome * 0.9 },
-    { month: 'Lut', wydatki: totalExpenses * 0.92, przychody: totalIncome * 0.95 },
-    { month: 'Mar', wydatki: totalExpenses * 1.1, przychody: totalIncome },
-    { month: 'Kwi', wydatki: totalExpenses * 0.78, przychody: totalIncome * 1.05 },
-    { month: 'Maj', wydatki: totalExpenses * 0.95, przychody: totalIncome },
-    { month: 'Cze', wydatki: totalExpenses, przychody: totalIncome },
-  ];
+  const taxValues = Object.values(taxByMonth);
+  const averageTaxes = taxValues.length === 0
+    ? 0
+    : taxValues.reduce((sum, value) => sum + Number(value), 0) / taxValues.length;
+
+  const averageIncomeAfterTaxes = averageIncome - averageTaxes;
+
+  const incomeHistoryPageCount = Math.max(1, Math.ceil(months.length / HISTORY_PAGE_SIZE));
+  const expenseHistoryPageCount = Math.max(1, Math.ceil(months.length / HISTORY_PAGE_SIZE));
+  const incomePageItems = paginate(months, incomePage, HISTORY_PAGE_SIZE);
+  const expensePageItems = paginate(months, expensePage, HISTORY_PAGE_SIZE);
+
+  const toggleSeries = (key: keyof typeof seriesVisibility) => {
+    setSeriesVisibility((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Statystyki</h1>
-          <p className="text-sm text-muted-foreground">Analiza finansów</p>
+          <p className="text-sm text-muted-foreground">Przegląd średnich miesięcznych, bilansu i trendów</p>
         </div>
-        <Select value={period} onValueChange={setPeriod}>
-          <SelectTrigger className="w-[160px]"><SelectValue /></SelectTrigger>
+        <Select
+          value={dashboardConfig?.categoryFieldId ?? '__none'}
+          onValueChange={onCategoryFieldChange}
+          disabled={loadingConfig}
+        >
+          <SelectTrigger className="w-70"><SelectValue placeholder="Pole kategorii" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="current">Ten miesiąc</SelectItem>
-            <SelectItem value="last">Poprzedni miesiąc</SelectItem>
-            <SelectItem value="quarter">Kwartał</SelectItem>
+            <SelectItem value="__none">Automatyczne (col_category)</SelectItem>
+            {(dashboardConfig?.availableCategoryFields ?? []).map((field: any) => (
+              <SelectItem key={field.id} value={field.id}>
+                {field.name}{field.tagGroupName ? ` (${field.tagGroupName})` : ''}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </div>
@@ -92,115 +215,260 @@ export default function StatisticsPage() {
       {/* Summary Cards */}
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Przychody</CardTitle></CardHeader>
-          <CardContent><p className="text-xl font-bold text-green-600">{formatPLN(totalIncome)}</p></CardContent>
+          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Średnie przychody</CardTitle></CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-xl font-bold text-green-600">{formatPLN(averageIncome)}</p>
+            <Button variant="outline" size="sm" onClick={() => { setIncomePage(1); setShowIncomeHistory(true); }}>
+              Historia przychodów
+            </Button>
+          </CardContent>
         </Card>
         <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Wydatki</CardTitle></CardHeader>
-          <CardContent><p className="text-xl font-bold text-red-500">{formatPLN(totalExpenses)}</p></CardContent>
+          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Średnie wydatki</CardTitle></CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-xl font-bold text-red-500">{formatPLN(averageExpenses)}</p>
+            <Button variant="outline" size="sm" onClick={() => { setExpensePage(1); setShowExpenseHistory(true); }}>
+              Historia wydatków
+            </Button>
+          </CardContent>
         </Card>
         <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Bilans</CardTitle></CardHeader>
-          <CardContent><p className={`text-xl font-bold ${totalIncome - totalExpenses >= 0 ? 'text-green-600' : 'text-red-500'}`}>{formatPLN(totalIncome - totalExpenses)}</p></CardContent>
+          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Średni bilans</CardTitle></CardHeader>
+          <CardContent className="space-y-1">
+            <p className={`text-xl font-bold ${averageBalance >= 0 ? 'text-green-600' : 'text-red-500'}`}>{formatPLN(averageBalance)}</p>
+            <p className="text-xs text-muted-foreground">
+              Oszczędności: <span className="font-medium text-foreground">{formatPLN(averageSavings)}</span> ({averageSavingsRate.toFixed(1)}%)
+            </p>
+          </CardContent>
         </Card>
         <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Stopa oszczędności</CardTitle></CardHeader>
-          <CardContent><p className={`text-xl font-bold ${savingsRate >= 0 ? 'text-green-600' : 'text-red-500'}`}>{savingsRate.toFixed(1)}%</p></CardContent>
+          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Podatki</CardTitle></CardHeader>
+          <CardContent className="space-y-1 text-sm">
+            <p className="font-semibold">{formatPLN(averageIncome)}</p>
+            <p className="text-muted-foreground">- {formatPLN(averageTaxes)}</p>
+            <p className="font-semibold text-primary">= {formatPLN(averageIncomeAfterTaxes)}</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Mediana wydatków</CardTitle></CardHeader>
+          <CardContent>
+            <p className="text-xl font-bold text-foreground">{formatPLN(medianMonthlyExpenses)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Zmienność przychodów</CardTitle></CardHeader>
+          <CardContent>
+            <p className="text-xl font-bold text-foreground">{formatPLN(incomeStdDev)}</p>
+            <p className="text-xs text-muted-foreground">Odchylenie standardowe</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Zmienność wydatków</CardTitle></CardHeader>
+          <CardContent>
+            <p className="text-xl font-bold text-foreground">{formatPLN(expensesStdDev)}</p>
+            <p className="text-xs text-muted-foreground">Odchylenie standardowe</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Skuteczność oszczędzania</CardTitle></CardHeader>
+          <CardContent>
+            <p className="text-xl font-bold text-foreground">{savingsEffectiveness.averageEffectiveness.toFixed(1)}%</p>
+            <p className="text-xs text-muted-foreground">Średnio plan vs wykonanie</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-3 xl:grid-cols-3">
+        <Card className="xl:col-span-2">
+          <CardHeader><CardTitle className="text-base">Prognoza bilansu (1-3 mies.)</CardTitle></CardHeader>
+          <CardContent className="grid gap-2 sm:grid-cols-3">
+            <div className="rounded border p-3">
+              <p className="text-xs text-muted-foreground">Następny miesiąc</p>
+              <p className={`text-lg font-semibold ${balanceForecast.nextMonth >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                {formatPLN(balanceForecast.nextMonth)}
+              </p>
+            </div>
+            <div className="rounded border p-3">
+              <p className="text-xs text-muted-foreground">Za 2 miesiące</p>
+              <p className={`text-lg font-semibold ${balanceForecast.inTwoMonths >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                {formatPLN(balanceForecast.inTwoMonths)}
+              </p>
+            </div>
+            <div className="rounded border p-3">
+              <p className="text-xs text-muted-foreground">Za 3 miesiące</p>
+              <p className={`text-lg font-semibold ${balanceForecast.inThreeMonths >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                {formatPLN(balanceForecast.inThreeMonths)}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader><CardTitle className="text-base">Stałe vs zmienne</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <div className="flex items-center justify-between"><span>Stałe</span><span className="font-medium">{formatPLN(fixedVsVariable.fixedAmount)} ({fixedVsVariable.fixedShare.toFixed(1)}%)</span></div>
+            <div className="flex items-center justify-between"><span>Zmienne</span><span className="font-medium">{formatPLN(fixedVsVariable.variableAmount)} ({fixedVsVariable.variableShare.toFixed(1)}%)</span></div>
+          </CardContent>
         </Card>
       </div>
 
       {/* Trend Chart */}
       <Card>
-        <CardHeader><CardTitle className="text-base">Trend przychodów i wydatków</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle className="text-base">Trend miesięczny (interaktywny)</CardTitle>
+          <div className="flex flex-wrap gap-2 text-xs">
+            {([
+              { key: 'income' as const, label: 'Przychody', color: '#16a34a' },
+              { key: 'expenses' as const, label: 'Wydatki', color: '#dc2626' },
+              { key: 'balance' as const, label: 'Bilans', color: '#2563eb' },
+              { key: 'savings' as const, label: 'Oszczędności', color: '#0d9488' },
+              { key: 'taxes' as const, label: 'Podatki', color: '#9333ea' },
+            ]).map((entry) => (
+              <Button
+                key={entry.key}
+                size="sm"
+                variant={seriesVisibility[entry.key] ? 'secondary' : 'outline'}
+                className="h-7 gap-1"
+                onClick={() => toggleSeries(entry.key)}
+              >
+                {seriesVisibility[entry.key] ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                <span style={{ color: entry.color }}>{entry.label}</span>
+              </Button>
+            ))}
+          </div>
+        </CardHeader>
         <CardContent>
           <ResponsiveContainer width="100%" height={280}>
-            <LineChart data={trendData}>
+            <LineChart data={taxSeries}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-              <XAxis dataKey="month" />
+              <XAxis dataKey="monthLabel" />
               <YAxis tickFormatter={(v) => `${(v/1000).toFixed(0)}k`} />
               <Tooltip formatter={(v) => formatPLN(Number(v))} />
-              <Legend />
-              <Line type="monotone" dataKey="przychody" name="Przychody" stroke="#2ECC71" strokeWidth={2} dot={{ r: 4 }} />
-              <Line type="monotone" dataKey="wydatki" name="Wydatki" stroke="#E74C3C" strokeWidth={2} dot={{ r: 4 }} />
+              {seriesVisibility.income && <Line type="monotone" dataKey="income" name="Przychody" stroke="#16a34a" strokeWidth={2} dot={{ r: 3 }} />}
+              {seriesVisibility.expenses && <Line type="monotone" dataKey="expenses" name="Wydatki" stroke="#dc2626" strokeWidth={2} dot={{ r: 3 }} />}
+              {seriesVisibility.balance && <Line type="monotone" dataKey="balance" name="Bilans" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} />}
+              {seriesVisibility.savings && <Line type="monotone" dataKey="savings" name="Oszczędności" stroke="#0d9488" strokeWidth={2} dot={{ r: 3 }} />}
+              {seriesVisibility.taxes && <Line type="monotone" dataKey="taxes" name="Podatki" stroke="#9333ea" strokeWidth={2} dot={{ r: 3 }} />}
             </LineChart>
           </ResponsiveContainer>
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {/* Category Bar Chart */}
+      <Card>
+        <CardHeader><CardTitle className="text-base">Wydatki wg kategorii</CardTitle></CardHeader>
+        <CardContent>
+          {categoryData.length === 0 ? (
+            <p className="text-center text-muted-foreground py-8">Brak danych kategorii. Ustaw mapowanie pola kategorii powyżej.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={320}>
+              <BarChart data={categoryData.slice(0, 12)} layout="vertical" margin={{ left: 90 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis type="number" tickFormatter={(value) => `${(Number(value) / 1000).toFixed(0)}k`} />
+                <YAxis type="category" dataKey="name" width={85} tick={{ fontSize: 12 }} />
+                <Tooltip formatter={(value) => formatPLN(Number(value))} />
+                <Bar dataKey="value" name="Kwota" radius={[0, 4, 4, 0]}>
+                  {categoryData.slice(0, 12).map((item: { name: string; value: number }, index: number) => (
+                    <Cell key={`bar-${index}`} fill={COLORS[index % COLORS.length]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
+
+      {periodTemplateId && <PeriodHistory templateId={periodTemplateId} />}
+
+      <div className="grid gap-3 xl:grid-cols-2">
         <Card>
-          <CardHeader><CardTitle className="text-base">Wydatki wg kategorii</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="text-base">Top 5 wzrostów kategorii m/m</CardTitle></CardHeader>
           <CardContent>
-            {categoryData.length === 0 ? (
-              <p className="text-center text-muted-foreground py-8">Brak danych</p>
+            {topGrowthCategories.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Za mało danych do porównania miesiąc do miesiąca.</p>
             ) : (
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={categoryData} layout="vertical" margin={{ left: 80 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis type="number" tickFormatter={(v) => `${(v/1).toFixed(0)}`} />
-                  <YAxis type="category" dataKey="name" width={75} tick={{ fontSize: 12 }} />
-                  <Tooltip formatter={(v) => formatPLN(Number(v))} />
-                  <Bar dataKey="value" name="Kwota" radius={[0, 4, 4, 0]}>
-                    {categoryData.map((_, i) => (
-                      <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+              <div className="space-y-2">
+                {topGrowthCategories.map((item) => (
+                  <div key={item.category} className="rounded border p-3">
+                    <div className="flex items-center justify-between">
+                      <p className="font-medium">{item.category}</p>
+                      <p className="text-sm text-red-500">+{item.growthRate.toFixed(1)}%</p>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {formatPLN(item.previousAmount)} {'->'} {formatPLN(item.currentAmount)} (delta: {formatPLN(item.delta)})
+                    </p>
+                  </div>
+                ))}
+              </div>
             )}
           </CardContent>
         </Card>
-
-        {/* Person Pie Chart */}
         <Card>
-          <CardHeader><CardTitle className="text-base">Wydatki wg osoby</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="text-base">Oszczędzanie: plan vs wykonanie</CardTitle></CardHeader>
           <CardContent>
-            {personData.length === 0 ? (
-              <p className="text-center text-muted-foreground py-8">Brak danych</p>
+            {savingsEffectiveness.monthly.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Brak danych o planie oszczędzania.</p>
             ) : (
-              <ResponsiveContainer width="100%" height={300}>
-                <PieChart>
-                  <Pie data={personData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} innerRadius={50} label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}>
-                    {personData.map((_, i) => (
-                      <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(v) => formatPLN(Number(v))} />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
+              <div className="space-y-2">
+                {savingsEffectiveness.monthly.slice(0, 6).map((item) => (
+                  <div key={item.monthKey} className="rounded border p-3">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="font-medium">{item.monthLabel}</span>
+                      <span className={item.effectiveness >= 100 ? 'text-green-600' : 'text-amber-600'}>{item.effectiveness.toFixed(1)}%</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Plan: {formatPLN(item.planned)} | Wykonanie: {formatPLN(item.actual)}</p>
+                  </div>
+                ))}
+              </div>
             )}
           </CardContent>
         </Card>
       </div>
 
-      {/* Top Expenses Table */}
-      <Card>
-        <CardHeader><CardTitle className="text-base">Największe kategorie wydatków</CardTitle></CardHeader>
-        <CardContent>
+      <Dialog open={showIncomeHistory} onOpenChange={setShowIncomeHistory}>
+        <DialogContent className="max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Historia przychodów</DialogTitle>
+            <DialogDescription>Wszystkie miesiące z paginacją</DialogDescription>
+          </DialogHeader>
           <div className="space-y-2">
-            {categoryData.slice(0, 5).map((c, i) => {
-              const pct = totalExpenses > 0 ? (c.value / totalExpenses) * 100 : 0;
-              return (
-                <div key={i} className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="h-3 w-3 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
-                    <span className="text-sm">{c.name}</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="w-24 h-2 bg-muted rounded-full overflow-hidden">
-                      <div className="h-full rounded-full" style={{ width: `${pct}%`, background: COLORS[i % COLORS.length] }} />
-                    </div>
-                    <span className="text-sm font-medium w-20 text-right">{formatPLN(c.value)}</span>
-                    <span className="text-xs text-muted-foreground w-10 text-right">{pct.toFixed(0)}%</span>
-                  </div>
-                </div>
-              );
-            })}
+            {incomePageItems.map((month) => (
+              <div key={month.monthKey} className="flex items-center justify-between rounded border px-3 py-2">
+                <span className="text-sm">{month.monthLabel}</span>
+                <span className="font-medium text-green-600">{formatPLN(Number(month.income ?? 0))}</span>
+              </div>
+            ))}
           </div>
-        </CardContent>
-      </Card>
+          <div className="flex items-center justify-between pt-2">
+            <Button variant="outline" size="sm" disabled={incomePage <= 1} onClick={() => setIncomePage((p) => p - 1)}>Poprzednia</Button>
+            <span className="text-xs text-muted-foreground">{incomePage} / {incomeHistoryPageCount}</span>
+            <Button variant="outline" size="sm" disabled={incomePage >= incomeHistoryPageCount} onClick={() => setIncomePage((p) => p + 1)}>Następna</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showExpenseHistory} onOpenChange={setShowExpenseHistory}>
+        <DialogContent className="max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Historia wydatków</DialogTitle>
+            <DialogDescription>Lista miesięcy z sumą wydatków</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            {expensePageItems.map((month) => (
+              <div key={month.monthKey} className="flex items-center justify-between rounded border px-3 py-2">
+                <span className="text-sm">{month.monthLabel}</span>
+                <span className="font-medium text-red-500">{formatPLN(Number(month.expenses ?? 0))}</span>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center justify-between pt-2">
+            <Button variant="outline" size="sm" disabled={expensePage <= 1} onClick={() => setExpensePage((p) => p - 1)}>Poprzednia</Button>
+            <span className="text-xs text-muted-foreground">{expensePage} / {expenseHistoryPageCount}</span>
+            <Button variant="outline" size="sm" disabled={expensePage >= expenseHistoryPageCount} onClick={() => setExpensePage((p) => p + 1)}>Następna</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

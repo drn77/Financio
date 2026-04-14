@@ -21,7 +21,7 @@ export function BillSummary({ bills }: Props) {
 
   const items = [
     {
-      label: 'Rachunki',
+      label: 'Cykliczne wydatki',
       value: `${activeBills.length}`,
       icon: <Receipt className="h-4 w-4" />,
       color: 'text-blue-600 dark:text-blue-400',

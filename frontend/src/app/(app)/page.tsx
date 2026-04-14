@@ -5,6 +5,23 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   TrendingUp,
   TrendingDown,
@@ -14,6 +31,7 @@ import {
   Calendar,
   PiggyBank,
   ChevronRight,
+  Settings,
 } from 'lucide-react';
 import {
   BarChart,
@@ -34,11 +52,22 @@ import { AddExpenseDialog } from '@/components/AddExpenseDialog';
 interface DashboardData {
   monthlyIncome: number;
   monthlyExpenses: number;
+  savings: number;
   balance: number;
   expensesByCategory: { category: string; amount: number }[];
   expensesByPerson: { person: string; amount: number }[];
   upcomingBills: { id: string; name: string; amount: number; dueDay: number; nextDueDate: string; isPaidThisMonth: boolean; paidAmount: number; remainingAmount: number; status: string }[];
   recentRecords: { id: string; data: any; createdAt: string }[];
+}
+
+interface DashboardConfig {
+  categoryFieldId: string | null;
+  availableCategoryFields: Array<{
+    id: string;
+    name: string;
+    tagGroupId: string | null;
+    tagGroupName: string | null;
+  }>;
 }
 
 const CHART_COLORS = [
@@ -58,25 +87,53 @@ function formatPLN(amount: number) {
   return new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN' }).format(amount);
 }
 
+function normalizeAmount(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeDashboardData(input: any): DashboardData {
+  return {
+    monthlyIncome: normalizeAmount(input?.monthlyIncome),
+    monthlyExpenses: normalizeAmount(input?.monthlyExpenses),
+    savings: normalizeAmount(input?.savings),
+    balance: normalizeAmount(input?.balance),
+    expensesByCategory: Array.isArray(input?.expensesByCategory) ? input.expensesByCategory : [],
+    expensesByPerson: Array.isArray(input?.expensesByPerson) ? input.expensesByPerson : [],
+    upcomingBills: Array.isArray(input?.upcomingBills) ? input.upcomingBills : [],
+    recentRecords: Array.isArray(input?.recentRecords) ? input.recentRecords : [],
+  };
+}
+
 export default function DashboardPage() {
   const { user } = useAuth();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [config, setConfig] = useState<DashboardConfig>({ categoryFieldId: null, availableCategoryFields: [] });
+  const [showConfig, setShowConfig] = useState(false);
+  const [savingConfig, setSavingConfig] = useState(false);
 
   const loadDashboard = useCallback(async () => {
     try {
+      try {
+        await api.syncBillAutoExpenses();
+      } catch (error) {
+        console.error('Failed to sync recurring expenses for dashboard:', error);
+      }
+
       const result = await api.getDashboard();
-      setData(result as DashboardData);
+      setData(normalizeDashboardData(result));
     } catch {
-      setData({
+      setData(normalizeDashboardData({
         monthlyIncome: 0,
         monthlyExpenses: 0,
+        savings: 0,
         balance: 0,
         expensesByCategory: [],
         expensesByPerson: [],
         upcomingBills: [],
         recentRecords: [],
-      });
+      }));
     } finally {
       setLoading(false);
     }
@@ -85,6 +142,34 @@ export default function DashboardPage() {
   useEffect(() => {
     loadDashboard();
   }, [loadDashboard]);
+
+  useEffect(() => {
+    const handleSummaryRefresh = () => {
+      void loadDashboard();
+    };
+
+    window.addEventListener('financio:summary-refresh', handleSummaryRefresh);
+    return () => window.removeEventListener('financio:summary-refresh', handleSummaryRefresh);
+  }, [loadDashboard]);
+
+  useEffect(() => {
+    api.getDashboardConfig()
+      .then((cfg) => setConfig(cfg))
+      .catch(() => setConfig({ categoryFieldId: null, availableCategoryFields: [] }));
+  }, []);
+
+  const saveDashboardConfig = async () => {
+    setSavingConfig(true);
+    try {
+      const next = await api.updateDashboardConfig({ categoryFieldId: config.categoryFieldId ?? null });
+      setConfig(next);
+      setShowConfig(false);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSavingConfig(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -96,10 +181,13 @@ export default function DashboardPage() {
 
   if (!data) return null;
 
+  const incomeValue = normalizeAmount(data.monthlyIncome);
+  const expensesValue = normalizeAmount(data.monthlyExpenses);
+  const savingsValue = normalizeAmount(data.savings);
+  const balanceValue = normalizeAmount(data.balance);
+
   const monthNames = ['Styczeń','Luty','Marzec','Kwiecień','Maj','Czerwiec','Lipiec','Sierpień','Wrzesień','Październik','Listopad','Grudzień'];
   const currentMonth = monthNames[new Date().getMonth()];
-
-  const savings = data.monthlyIncome - data.monthlyExpenses;
 
   return (
     <div className="space-y-6">
@@ -113,7 +201,52 @@ export default function DashboardPage() {
             Podsumowanie finansów &mdash; {currentMonth} {new Date().getFullYear()}
           </p>
         </div>
-        <AddExpenseDialog onExpenseAdded={loadDashboard} />
+        <div className="flex items-center gap-2">
+          <Dialog open={showConfig} onOpenChange={setShowConfig}>
+            <DialogTrigger asChild>
+              <Button variant="outline" size="icon" className="h-10 w-10" aria-label="Konfiguracja dashboardu">
+                <Settings className="h-4 w-4" />
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Konfiguracja dashboardu</DialogTitle>
+                <DialogDescription>
+                  Wybierz pole kategorii używane w akcji „Nowy wydatek”.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Pole kategorii</p>
+                <Select
+                  value={config.categoryFieldId ?? '__none'}
+                  onValueChange={(v) => setConfig((prev) => ({ ...prev, categoryFieldId: v === '__none' ? null : v }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Wybierz pole" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none">Brak</SelectItem>
+                    {config.availableCategoryFields.map((field) => (
+                      <SelectItem key={field.id} value={field.id}>
+                        {field.name}{field.tagGroupName ? ` • ${field.tagGroupName}` : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setShowConfig(false)}>Anuluj</Button>
+                <Button onClick={saveDashboardConfig} disabled={savingConfig}>
+                  {savingConfig ? 'Zapisywanie...' : 'Zapisz'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          <AddExpenseDialog onExpenseAdded={loadDashboard} />
+        </div>
       </div>
 
       {/* Stats Cards — 4 cards like the reference */}
@@ -127,8 +260,8 @@ export default function DashboardPage() {
               </div>
             </div>
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Bilans</p>
-            <p className={`text-lg font-bold sm:text-2xl mt-1 ${data.balance >= 0 ? 'text-primary' : 'text-destructive'}`}>
-              {formatPLN(data.balance)}
+            <p className={`text-lg font-bold sm:text-2xl mt-1 ${balanceValue >= 0 ? 'text-primary' : 'text-destructive'}`}>
+              {formatPLN(balanceValue)}
             </p>
           </CardContent>
         </Card>
@@ -143,11 +276,11 @@ export default function DashboardPage() {
             </div>
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Przychody</p>
             <p className="text-lg font-bold sm:text-2xl mt-1 text-primary">
-              {formatPLN(data.monthlyIncome)}
+              {formatPLN(incomeValue)}
             </p>
             <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
               <ArrowUpRight className="h-3 w-3 text-primary" />
-              Ten miesiąc
+              Bieżący okres
             </div>
           </CardContent>
         </Card>
@@ -161,9 +294,13 @@ export default function DashboardPage() {
               </div>
             </div>
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Oszczędności</p>
-            <p className={`text-lg font-bold sm:text-2xl mt-1 ${savings >= 0 ? 'text-blue-500' : 'text-destructive'}`}>
-              {formatPLN(savings)}
+            <p className={`text-lg font-bold sm:text-2xl mt-1 ${savingsValue >= 0 ? 'text-blue-500' : 'text-destructive'}`}>
+              {formatPLN(savingsValue)}
             </p>
+            <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
+              <ArrowUpRight className="h-3 w-3 text-blue-500" />
+              Bieżący okres
+            </div>
           </CardContent>
         </Card>
 
@@ -177,11 +314,11 @@ export default function DashboardPage() {
             </div>
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Wydatki</p>
             <p className="text-lg font-bold sm:text-2xl mt-1 text-destructive">
-              {formatPLN(data.monthlyExpenses)}
+              {formatPLN(expensesValue)}
             </p>
             <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
               <ArrowDownRight className="h-3 w-3 text-destructive" />
-              Ten miesiąc
+              Bieżący okres
             </div>
           </CardContent>
         </Card>
@@ -214,7 +351,7 @@ export default function DashboardPage() {
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <div className="flex h-[280px] items-center justify-center text-muted-foreground text-sm">
+              <div className="flex h-70 items-center justify-center text-muted-foreground text-sm">
                 Brak danych do wyświetlenia
               </div>
             )}
@@ -270,7 +407,7 @@ export default function DashboardPage() {
                 </div>
               </div>
             ) : (
-              <div className="flex h-[280px] items-center justify-center text-muted-foreground text-sm">
+              <div className="flex h-70 items-center justify-center text-muted-foreground text-sm">
                 Brak danych do wyświetlenia
               </div>
             )}

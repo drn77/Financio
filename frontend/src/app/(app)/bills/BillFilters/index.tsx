@@ -2,7 +2,6 @@
 
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import {
   Select,
   SelectContent,
@@ -10,32 +9,46 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Search, X, Filter } from 'lucide-react';
-import type { ICategory } from '@shared/models';
-import { STATUS_LABELS, type IFilterState, type ITagOption, type BillStatus } from '../model';
+import { Search, X, Filter, ArrowUpDown } from 'lucide-react';
+import { Tag } from '@/components/Tag';
+import {
+  STATUS_LABELS,
+  SORT_LABELS,
+  type IFilterState,
+  type ITagOption,
+  type BillStatus,
+  type SortDirection,
+  type SortField,
+} from '../model';
 
 interface Props {
   filters: IFilterState;
   onFiltersChange: (filters: IFilterState) => void;
-  categories: ICategory[];
   tags: ITagOption[];
+  sortField: SortField | '';
+  sortDirection: SortDirection;
+  onSortFieldChange: (field: SortField | '') => void;
+  onSortDirectionToggle: () => void;
 }
 
-export function BillFilters({ filters, onFiltersChange, categories, tags }: Props) {
+export function BillFilters({
+  filters,
+  onFiltersChange,
+  tags,
+  sortField,
+  sortDirection,
+  onSortFieldChange,
+  onSortDirectionToggle,
+}: Props) {
   const hasActiveFilters =
-    filters.status !== 'ALL' || filters.tagIds.length > 0 || filters.categoryId !== '' || filters.search !== '';
+    filters.status !== 'ALL' || filters.tagIds.length > 0 || filters.search !== '' || !!sortField;
 
   const _clearFilters = () => {
-    onFiltersChange({ status: 'ALL', tagIds: [], categoryId: '', search: '' });
+    onFiltersChange({ status: 'ALL', tagIds: [], search: '' });
+    onSortFieldChange('');
   };
 
-  const _toggleTag = (tagId: string) => {
-    const current = filters.tagIds;
-    const next = current.includes(tagId)
-      ? current.filter((id) => id !== tagId)
-      : [...current, tagId];
-    onFiltersChange({ ...filters, tagIds: next });
-  };
+  const selectedTagId = filters.tagIds[0] ?? '__all';
 
   return (
     <div className="space-y-3">
@@ -45,7 +58,7 @@ export function BillFilters({ filters, onFiltersChange, categories, tags }: Prop
           <Input
             value={filters.search}
             onChange={(e) => onFiltersChange({ ...filters, search: e.target.value })}
-            placeholder="Szukaj rachunku..."
+            placeholder="Wyszukaj cykliczne wydatki..."
             className="pl-9"
           />
         </div>
@@ -68,30 +81,45 @@ export function BillFilters({ filters, onFiltersChange, categories, tags }: Prop
           </SelectContent>
         </Select>
 
-        {categories.length > 0 && (
+        <Select
+          value={selectedTagId}
+          onValueChange={(value) => onFiltersChange({ ...filters, tagIds: value === '__all' ? [] : [value] })}
+        >
+          <SelectTrigger className="w-44">
+            <SelectValue placeholder="Tag" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all">Wszystkie tagi</SelectItem>
+            {tags.map((tag) => (
+              <SelectItem key={tag.id} value={tag.id}>
+                <Tag name={tag.name} color={tag.color} icon={tag.icon} groupName={tag.groupName} />
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <div className="flex items-center gap-2">
+          <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
           <Select
-            value={filters.categoryId || 'all'}
-            onValueChange={(v) => onFiltersChange({ ...filters, categoryId: v === 'all' ? '' : v })}
+            value={sortField || '__none'}
+            onValueChange={(value) => onSortFieldChange(value === '__none' ? '' : value as SortField)}
           >
-            <SelectTrigger className="w-44">
-              <SelectValue placeholder="Kategoria" />
+            <SelectTrigger className="w-40">
+              <SelectValue placeholder="Sortuj" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">Wszystkie kategorie</SelectItem>
-              {categories.map((cat) => (
-                <SelectItem key={cat.id} value={cat.id}>
-                  <span className="flex items-center gap-2">
-                    <span
-                      className="inline-block h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: cat.color }}
-                    />
-                    {cat.name}
-                  </span>
-                </SelectItem>
+              <SelectItem value="__none">Bez sortowania</SelectItem>
+              {(Object.entries(SORT_LABELS) as [SortField, string][]).map(([key, label]) => (
+                <SelectItem key={key} value={key}>{label}</SelectItem>
               ))}
             </SelectContent>
           </Select>
-        )}
+          {sortField && (
+            <Button variant="ghost" size="sm" className="h-8 px-2" onClick={onSortDirectionToggle}>
+              {sortDirection === 'asc' ? '↑' : '↓'}
+            </Button>
+          )}
+        </div>
 
         {hasActiveFilters && (
           <Button variant="ghost" size="sm" onClick={_clearFilters} className="gap-1">
@@ -100,37 +128,6 @@ export function BillFilters({ filters, onFiltersChange, categories, tags }: Prop
           </Button>
         )}
       </div>
-
-      {tags.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          <Badge
-            variant={filters.tagIds.length === 0 ? 'default' : 'outline'}
-            className="cursor-pointer select-none"
-            onClick={() => onFiltersChange({ ...filters, tagIds: [] })}
-          >
-            Wszystkie tagi
-          </Badge>
-          {tags.map((tag) => {
-            const isSelected = filters.tagIds.includes(tag.id);
-            return (
-              <Badge
-                key={tag.id}
-                variant={isSelected ? 'default' : 'outline'}
-                className="cursor-pointer select-none transition-colors"
-                style={
-                  isSelected
-                    ? { backgroundColor: tag.color, borderColor: tag.color }
-                    : { borderColor: tag.color, color: tag.color }
-                }
-                onClick={() => _toggleTag(tag.id)}
-              >
-                {tag.name}
-                {isSelected && <X className="ml-1 h-3 w-3" />}
-              </Badge>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }

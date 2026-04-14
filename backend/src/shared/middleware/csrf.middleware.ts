@@ -3,7 +3,7 @@ import { Request, Response, NextFunction } from 'express';
 
 const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
 
-const EXEMPT_PATHS = ['/api/v2/auth/login', '/api/v2/auth/register', '/api/auth/login', '/api/auth/register'];
+const EXEMPT_PATHS = ['/api/v2/auth/login', '/api/v2/auth/register', '/api/auth/login', '/api/auth/register', '/api/v2/splits/join/'];
 
 @Injectable()
 export class CsrfMiddleware implements NestMiddleware {

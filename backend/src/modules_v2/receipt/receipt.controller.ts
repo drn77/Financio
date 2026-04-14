@@ -4,6 +4,9 @@ import { FamilyId, UserId } from '../../shared/decorators/session.decorator';
 import { ReceiptContextService } from './receipt-context.service';
 import { CreateReceiptDto } from './dto/create-receipt.dto';
 import { UpdateReceiptDto } from './dto/update-receipt.dto';
+import { UpdateReceiptConfigDto } from './dto/update-receipt-config.dto';
+import { ExtractPdfTextDto } from './dto/extract-pdf-text.dto';
+import { ParseReceiptAiDto } from './dto/parse-receipt-ai.dto';
 
 @Controller('v2/receipts')
 @UseGuards(SessionAuthGuard)
@@ -30,6 +33,16 @@ export class ReceiptController {
     @Query('to') to?: string,
   ) {
     return this.receiptContext.getStats(familyId, from, to);
+  }
+
+  @Get('config')
+  async getConfig(@FamilyId() familyId: string) {
+    return this.receiptContext.getConfig(familyId);
+  }
+
+  @Put('config')
+  async updateConfig(@FamilyId() familyId: string, @Body() input: UpdateReceiptConfigDto) {
+    return this.receiptContext.updateConfig(familyId, input);
   }
 
   @Get('duplicate-check')
@@ -78,6 +91,16 @@ export class ReceiptController {
     @Param('id') id: string,
   ) {
     return this.receiptContext.createExpenseFromReceipt(id, familyId);
+  }
+
+  @Post('extract-pdf-text')
+  async extractPdfText(@FamilyId() familyId: string, @Body() input: ExtractPdfTextDto) {
+    return this.receiptContext.extractPdfText(familyId, input.dataUrl);
+  }
+
+  @Post('parse-receipt-ai')
+  async parseReceiptAI(@Body() input: ParseReceiptAiDto) {
+    return this.receiptContext.parseReceiptAI(input.text);
   }
 
   @Put(':id')

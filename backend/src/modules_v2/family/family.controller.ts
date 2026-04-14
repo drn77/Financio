@@ -1,8 +1,9 @@
-import { Controller, Get, Post, Delete, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards } from '@nestjs/common';
 import { SessionAuthGuard } from '../../shared/guards/auth.guard';
 import { FamilyId } from '../../shared/decorators/session.decorator';
 import { FamilyContextService } from './family-context.service';
 import { AddMemberDto } from './dto/add-member.dto';
+import { UpdateTagMappingsDto } from './dto/update-tag-mappings.dto';
 
 @Controller('v2/family')
 @UseGuards(SessionAuthGuard)
@@ -29,5 +30,29 @@ export class FamilyController {
     await this.familyContext.removeMember(id, familyId);
 
     return { message: 'Member removed successfully' };
+  }
+
+  @Get('tag-mappings')
+  async getTagMappings(@FamilyId() familyId: string) {
+    return this.familyContext.getTagMappings(familyId);
+  }
+
+  @Put('tag-mappings')
+  async updateTagMappings(@FamilyId() familyId: string, @Body() input: UpdateTagMappingsDto) {
+    return this.familyContext.updateTagMappings(familyId, input);
+  }
+
+  @Get('expense-mappings')
+  async getExpenseMappings(@FamilyId() familyId: string) {
+    return this.familyContext.getExpenseMappings(familyId);
+  }
+
+  @Put('expense-mappings/:sourceType')
+  async updateExpenseMappings(
+    @FamilyId() familyId: string,
+    @Param('sourceType') sourceType: string,
+    @Body() body: { fieldConfigs: Record<string, any> },
+  ) {
+    return this.familyContext.updateExpenseMappings(familyId, sourceType, body.fieldConfigs);
   }
 }

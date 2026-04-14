@@ -74,7 +74,7 @@ export class AuthActionsService {
             { id: 'col_type', name: 'Rodzaj', type: 'select', required: true, options: ['Wydatek', 'Przychód'], defaultBehavior: 'last_used' },
             { id: 'col_amount', name: 'Kwota', type: 'currency', required: true, currencyOptions: ['PLN', 'EUR', 'USD'], defaultBehavior: 'empty' },
             { id: 'col_status', name: 'Stan', type: 'select', required: false, options: ['Rozliczone', 'Zaległe', 'Planowe'], defaultBehavior: 'last_used' },
-            { id: 'col_category', name: 'Kategoria', type: 'tags', required: false, defaultBehavior: 'empty' },
+            { id: 'col_category', name: 'Kategoria', type: 'tag_group', required: false, defaultBehavior: 'empty' },
             { id: 'col_person', name: 'Dla kogo?', type: 'person', required: false, defaultBehavior: 'current_user' },
             { id: 'col_notes', name: 'Notatki', type: 'text', required: false, defaultBehavior: 'empty' },
           ],

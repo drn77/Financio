@@ -180,7 +180,7 @@ export function CSVImportDialog({ open, onOpenChange, columns, categories, onImp
               if (!(col.id in data)) {
                 if (col.type === 'checkbox') data[col.id] = false;
                 else if (col.type === 'currency') data[col.id] = { amount: 0, currency: 'PLN' };
-                else if (col.type === 'tags') data[col.id] = [];
+                else if (col.type === 'tag_group') data[col.id] = [];
                 else data[col.id] = '';
               }
             }

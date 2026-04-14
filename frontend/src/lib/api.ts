@@ -1,5 +1,6 @@
 import type { ILoginRequest, IRegisterRequest, IUser, ISessionResponse } from '@shared/auth';
-import type { IBill, IBillPayment, IBillStats, IRecordStats, IReceipt, IReceiptStats, IStore, IBudget, IEvent, IEventItem, IEventTodo, IEventNote, IEventExpense, IEventStats } from '@shared/models';
+import type { IBill, IBillPayment, IBillStats, IRecordStats, IReceipt, IReceiptStats, IStore, IBudget, IEvent, IEventItem, IEventTodo, IEventNote, IEventExpense, IEventStats, ISavingsGoal, ISplit, ISplitPreview, ISplitMessage, ISplitSummary, IJoinSplitResult } from '@shared/models';
+import { toastError, toastSuccess } from './toast';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -18,6 +19,10 @@ class ApiClient {
     this.csrfToken = token;
   }
 
+  getCsrfToken(): string | null {
+    return this.csrfToken;
+  }
+
   private _getHeaders(): HeadersInit {
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
@@ -30,22 +35,127 @@ class ApiClient {
     return headers;
   }
 
-  private async _request<T>(path: string, options: RequestInit = {}): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      ...options,
-      credentials: 'include',
-      headers: {
-        ...this._getHeaders(),
-        ...options.headers,
-      },
-    });
+  private _defaultSuccessMessage(method: string, path: string): string {
+    const cleanPath = path.split('?')[0];
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: 'Request failed' }));
-      throw new Error(error.message || `HTTP ${response.status}`);
+    if (method === 'POST' && cleanPath === '/api/v2/auth/login') return 'Zalogowano pomyślnie';
+    if (method === 'POST' && cleanPath === '/api/v2/auth/register') return 'Konto zostało utworzone';
+    if (method === 'POST' && cleanPath === '/api/v2/auth/logout') return 'Wylogowano pomyślnie';
+
+    if (method === 'PUT' && cleanPath === '/api/v2/tax/config') return 'Zapisano konfigurację podatków';
+    if (method === 'PUT' && cleanPath === '/api/v2/family/tag-mappings') return 'Zapisano mapowanie tagów';
+    if (method === 'PUT' && /\/api\/v2\/family\/expense-mappings\/[^/]+$/.test(cleanPath)) return 'Zapisano mapowanie pól wydatku';
+    if (method === 'PUT' && cleanPath === '/api/v2/kanban/config') return 'Zapisano konfigurację Kanban';
+    if (method === 'PUT' && cleanPath === '/api/v2/dashboard/config') return 'Zapisano konfigurację dashboardu';
+    if (method === 'POST' && cleanPath === '/api/v2/kanban/move') return 'Przeniesiono kartę';
+
+    if (method === 'POST' && /\/api\/v2\/bills\/[^/]+\/pay$/.test(cleanPath)) return 'Oznaczono rachunek jako opłacony';
+    if (method === 'POST' && /\/api\/v2\/fixed-expenses\/[^/]+\/pay$/.test(cleanPath)) return 'Opłacono stały wydatek';
+    if (method === 'POST' && /\/api\/v2\/receipts\/[^/]+\/create-expense$/.test(cleanPath)) return 'Zatwierdzono paragon i dodano wydatek';
+    if (method === 'POST' && /\/api\/v2\/templates\/[^/]+\/records\/import$/.test(cleanPath)) return 'Zaimportowano rekordy';
+    if (method === 'PUT' && /\/api\/v2\/templates\/[^/]+\/records\/bulk$/.test(cleanPath)) return 'Zapisano zmiany rekordów';
+    if (method === 'POST' && /\/api\/v2\/templates\/[^/]+\/records\/[^/]+\/duplicate$/.test(cleanPath)) return 'Zduplikowano rekord';
+    if (method === 'POST' && /\/api\/v2\/receipts\/[^/]+\/duplicate$/.test(cleanPath)) return 'Zduplikowano paragon';
+
+    if (method === 'PUT' && /\/api\/v2\/tag-groups\/[^/]+\/tags\/reorder$/.test(cleanPath)) return 'Zmieniono kolejność tagów';
+
+    if (method === 'POST') return 'Dodano pomyślnie';
+    if (method === 'PUT' || method === 'PATCH') return 'Zapisano zmiany';
+    if (method === 'DELETE') return 'Usunięto pomyślnie';
+    return 'Operacja zakończona powodzeniem';
+  }
+
+  private async _request<T>(
+    path: string,
+    options: RequestInit & {
+      timeout?: number;
+      notifySuccess?: boolean;
+      successMessage?: string;
+      suppressErrorToast?: boolean;
+    } = {}
+  ): Promise<T> {
+    const {
+      timeout = 15000,
+      notifySuccess,
+      successMessage,
+      suppressErrorToast = false,
+      ...fetchOptions
+    } = options;
+
+    const controller = new AbortController();
+    const timeoutId = timeout > 0 ? setTimeout(() => controller.abort(), timeout) : null;
+
+    // Compose caller-provided signal (e.g. for aborting in-flight saves)
+    // with the internal timeout signal so both can cancel the request.
+    const { signal: callerSignal, ...restFetchOptions } = fetchOptions;
+    const combinedSignal = callerSignal
+      ? AbortSignal.any([controller.signal, callerSignal])
+      : controller.signal;
+
+    try {
+      const response = await fetch(`${this.baseUrl}${path}`, {
+        ...restFetchOptions,
+        credentials: 'include',
+        signal: combinedSignal,
+        headers: {
+          ...this._getHeaders(),
+          ...restFetchOptions.headers,
+        },
+      });
+
+      const method = (fetchOptions.method ?? 'GET').toUpperCase();
+      const isMutation = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
+
+      const responseData = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        const message = (responseData as { message?: string } | null)?.message || `HTTP ${response.status}`;
+        const requestError = new Error(message) as Error & { _toastShown?: boolean };
+        if (!suppressErrorToast) {
+          toastError(message);
+          requestError._toastShown = true;
+        }
+        throw requestError;
+      }
+
+      if ((notifySuccess ?? isMutation) && typeof window !== 'undefined') {
+        const messageFromResponse = (responseData as { message?: string } | null)?.message;
+        toastSuccess(
+          successMessage ||
+          this._defaultSuccessMessage(method, path) ||
+          messageFromResponse ||
+          'Operacja zakończona powodzeniem'
+        );
+      }
+
+      return responseData as T;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        // If the caller's signal triggered the abort, re-throw as-is
+        // so the caller can detect it with `instanceof DOMException`.
+        if (callerSignal?.aborted) {
+          throw error;
+        }
+        // Otherwise it was the internal timeout — wrap with a user message.
+        const message = 'Przekroczono limit czasu połączenia z serwerem';
+        const timeoutError = new Error(message) as Error & { _toastShown?: boolean };
+        if (!suppressErrorToast) {
+          toastError(message);
+          timeoutError._toastShown = true;
+        }
+        throw timeoutError;
+      }
+
+      if (!suppressErrorToast && error instanceof Error && !(error as Error & { _toastShown?: boolean })._toastShown && error.message) {
+        if (error.message !== 'Request failed') {
+          toastError(error.message);
+        }
+      }
+
+      throw error;
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
     }
-
-    return response.json();
   }
 
   async getSession(): Promise<ISessionResponse> {
@@ -132,11 +242,22 @@ class ApiClient {
     await this._request(`/api/v2/templates/${templateId}/records/${recordId}`, { method: 'DELETE' });
   }
 
-  async bulkUpdateRecords(templateId: string, records: AnyRecord[], deletedIds?: string[]): Promise<AnyRecord[]> {
+  async bulkUpdateRecords(templateId: string, records: AnyRecord[], deletedIds?: string[], signal?: AbortSignal): Promise<AnyRecord[]> {
     return this._request(`/api/v2/templates/${templateId}/records/bulk`, {
       method: 'PUT',
       body: JSON.stringify({ records, deletedIds }),
+      signal,
     });
+  }
+
+  bulkUpdateRecordsKeepalive(templateId: string, records: AnyRecord[], deletedIds?: string[]): void {
+    void fetch(`${this.baseUrl}/api/v2/templates/${templateId}/records/bulk`, {
+      method: 'PUT',
+      credentials: 'include',
+      keepalive: true,
+      headers: this._getHeaders(),
+      body: JSON.stringify({ records, deletedIds }),
+    }).catch(() => undefined);
   }
 
   async getRecordStats(templateId: string, from?: string, to?: string): Promise<IRecordStats> {
@@ -223,6 +344,25 @@ class ApiClient {
     return this._request(`/api/v2/family/members/${memberId}`, { method: 'DELETE' });
   }
 
+  async getTagMappings(): Promise<Record<string, string>> {
+    return this._request('/api/v2/family/tag-mappings');
+  }
+
+  async updateTagMappings(mappings: { income?: string; expense?: string; planning?: string; costs?: string; savings?: string }): Promise<Record<string, string>> {
+    return this._request('/api/v2/family/tag-mappings', { method: 'PUT', body: JSON.stringify(mappings) });
+  }
+
+  async getExpenseMappings(): Promise<AnyRecord> {
+    return this._request('/api/v2/family/expense-mappings');
+  }
+
+  async updateExpenseMappings(sourceType: string, fieldConfigs: Record<string, unknown>): Promise<AnyRecord> {
+    return this._request(`/api/v2/family/expense-mappings/${sourceType}`, {
+      method: 'PUT',
+      body: JSON.stringify({ fieldConfigs }),
+    });
+  }
+
   // ─── Bills ────────────────────────────────────────
   async getBills(active?: boolean): Promise<IBill[]> {
     const params = active !== undefined ? `?active=${active}` : '';
@@ -236,6 +376,10 @@ class ApiClient {
 
   async getBillStats(): Promise<IBillStats> {
     return this._request('/api/v2/bills/stats');
+  }
+
+  async syncBillAutoExpenses(): Promise<{ created: number; updated: number }> {
+    return this._request('/api/v2/bills/sync-auto-expenses', { method: 'POST', notifySuccess: false });
   }
 
   async getBillPayments(id: string): Promise<IBillPayment[]> {
@@ -282,6 +426,17 @@ class ApiClient {
     return this._request(`/api/v2/receipts/stats${qs ? `?${qs}` : ''}`);
   }
 
+  async getReceiptConfig(): Promise<AnyRecord> {
+    return this._request('/api/v2/receipts/config');
+  }
+
+  async updateReceiptConfig(data: AnyRecord): Promise<AnyRecord> {
+    return this._request('/api/v2/receipts/config', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
   async checkReceiptDuplicate(amount: number, date: string): Promise<{ id: string; description: string } | null> {
     return this._request(`/api/v2/receipts/duplicate-check?amount=${amount}&date=${date}`);
   }
@@ -290,12 +445,40 @@ class ApiClient {
     return this._request(`/api/v2/receipts/suggest-category?description=${encodeURIComponent(description)}`);
   }
 
-  async createReceipt(data: AnyRecord): Promise<IReceipt> {
-    return this._request('/api/v2/receipts', { method: 'POST', body: JSON.stringify(data) });
+  async extractReceiptPdfText(dataUrl: string): Promise<{ text: string; hasText: boolean; length: number; source?: string; diagnostics?: string[]; parsed?: { storeName: string | null; date: string | null; items: Array<{ name: string; quantity: number; unitPrice: number; total: number }>; total: number; description: string | null; formattedText: string | null } | null }> {
+    return this._request('/api/v2/receipts/extract-pdf-text', {
+      method: 'POST',
+      body: JSON.stringify({ dataUrl }),
+      notifySuccess: false,
+      suppressErrorToast: true,
+    });
   }
 
-  async updateReceipt(id: string, data: AnyRecord): Promise<IReceipt> {
-    return this._request(`/api/v2/receipts/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  async parseReceiptAI(text: string): Promise<{ parsed: { storeName: string | null; date: string | null; items: Array<{ name: string; quantity: number; unitPrice: number; total: number }>; total: number; description: string | null; formattedText: string | null } | null }> {
+    return this._request('/api/v2/receipts/parse-receipt-ai', {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+      notifySuccess: false,
+      suppressErrorToast: true,
+    });
+  }
+
+  async createReceipt(data: AnyRecord, options?: { notifySuccess?: boolean; suppressErrorToast?: boolean }): Promise<IReceipt> {
+    return this._request('/api/v2/receipts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+      notifySuccess: options?.notifySuccess,
+      suppressErrorToast: options?.suppressErrorToast,
+    });
+  }
+
+  async updateReceipt(id: string, data: AnyRecord, options?: { notifySuccess?: boolean; suppressErrorToast?: boolean }): Promise<IReceipt> {
+    return this._request(`/api/v2/receipts/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+      notifySuccess: options?.notifySuccess,
+      suppressErrorToast: options?.suppressErrorToast,
+    });
   }
 
   async duplicateReceipt(id: string): Promise<IReceipt> {
@@ -308,6 +491,28 @@ class ApiClient {
 
   async deleteReceipt(id: string): Promise<void> {
     await this._request(`/api/v2/receipts/${id}`, { method: 'DELETE' });
+  }
+
+  // ─── Billing Periods ─────────────────────────────
+  async getBillingPeriod(templateId: string): Promise<AnyRecord | null> {
+    return this._request(`/api/v2/templates/${templateId}/billing-period`);
+  }
+
+  async overrideBillingPeriodReset(templateId: string, overrideResetDate: string): Promise<AnyRecord> {
+    return this._request(`/api/v2/templates/${templateId}/billing-period/override`, {
+      method: 'POST',
+      body: JSON.stringify({ overrideResetDate }),
+    });
+  }
+
+  async deleteBillingPeriodOverride(templateId: string, overrideId: string): Promise<void> {
+    await this._request(`/api/v2/templates/${templateId}/billing-period/override/${overrideId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getBillingPeriodHistory(templateId: string, count = 6): Promise<AnyRecord[]> {
+    return this._request(`/api/v2/templates/${templateId}/billing-period/history?count=${count}`);
   }
 
   // ─── Stores ───────────────────────────────────────
@@ -454,8 +659,20 @@ class ApiClient {
     return this._request('/api/v2/fixed-expenses');
   }
 
+  async getFixedExpense(id: string): Promise<AnyRecord> {
+    return this._request(`/api/v2/fixed-expenses/${id}`);
+  }
+
   async createFixedExpense(data: AnyRecord): Promise<AnyRecord> {
     return this._request('/api/v2/fixed-expenses', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateFixedExpense(id: string, data: AnyRecord): Promise<AnyRecord> {
+    return this._request(`/api/v2/fixed-expenses/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async payFixedExpense(id: string, data?: AnyRecord): Promise<AnyRecord> {
+    return this._request(`/api/v2/fixed-expenses/${id}/pay`, { method: 'POST', body: JSON.stringify(data ?? {}) });
   }
 
   async deleteFixedExpense(id: string): Promise<void> {
@@ -463,7 +680,7 @@ class ApiClient {
   }
 
   // ─── Savings ──────────────────────────────────────
-  async getSavingsGoals(): Promise<AnyRecord[]> {
+  async getSavingsGoals(): Promise<ISavingsGoal[]> {
     return this._request('/api/v2/savings/goals');
   }
 
@@ -471,11 +688,27 @@ class ApiClient {
     return this._request('/api/v2/savings/goals', { method: 'POST', body: JSON.stringify(data) });
   }
 
+  async updateSavingsGoal(id: string, data: AnyRecord): Promise<AnyRecord> {
+    return this._request(`/api/v2/savings/goals/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async deleteSavingsGoal(id: string): Promise<void> {
+    return this._request(`/api/v2/savings/goals/${id}`, { method: 'DELETE' });
+  }
+
   async addDeposit(goalId: string, data: AnyRecord): Promise<AnyRecord> {
     return this._request(`/api/v2/savings/goals/${goalId}/deposits`, {
       method: 'POST',
       body: JSON.stringify(data),
     });
+  }
+
+  async getSavingsConfig(): Promise<AnyRecord> {
+    return this._request('/api/v2/savings/config');
+  }
+
+  async updateSavingsConfig(config: AnyRecord): Promise<AnyRecord> {
+    return this._request('/api/v2/savings/config', { method: 'PUT', body: JSON.stringify(config) });
   }
 
   // ─── Dashboard ────────────────────────────────────
@@ -488,8 +721,430 @@ class ApiClient {
     balanceAfterPlanned: number;
     incurredCosts: number;
     plannedCosts: number;
+    pendingReceiptOcrCount: number;
+    upcomingPlannedPayments: Array<{
+      id: string;
+      source: 'bill' | 'fixed-expense' | 'savings';
+      name: string;
+      amount: number;
+      currency: string;
+      dueDate: string;
+    }>;
   }> {
     return this._request('/api/v2/dashboard/summary');
+  }
+
+  async getDashboardStatistics(): Promise<AnyRecord> {
+    return this._request('/api/v2/dashboard/statistics');
+  }
+
+  async getDashboardConfig(): Promise<{
+    categoryFieldId: string | null;
+    availableCategoryFields: Array<{
+      id: string;
+      name: string;
+      tagGroupId: string | null;
+      tagGroupName: string | null;
+    }>;
+  }> {
+    return this._request('/api/v2/dashboard/config');
+  }
+
+  async updateDashboardConfig(data: { categoryFieldId?: string | null }): Promise<{
+    categoryFieldId: string | null;
+    availableCategoryFields: Array<{
+      id: string;
+      name: string;
+      tagGroupId: string | null;
+      tagGroupName: string | null;
+    }>;
+  }> {
+    return this._request('/api/v2/dashboard/config', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  // ─── Taxes ───────────────────────────────────────
+  async getTaxConfig(): Promise<{
+    form: 'SCALE' | 'LINEAR' | 'LUMPSUM';
+    lumpSumRate: number;
+    includeSickness: boolean;
+    includeSocialContributions: boolean;
+    includeHealthContribution: boolean;
+  }> {
+    return this._request('/api/v2/tax/config');
+  }
+
+  async updateTaxConfig(data: AnyRecord): Promise<AnyRecord> {
+    return this._request('/api/v2/tax/config', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async getTaxSummary(month?: number, year?: number): Promise<AnyRecord> {
+    const params = new URLSearchParams();
+    if (month) params.set('month', String(month));
+    if (year) params.set('year', String(year));
+    const qs = params.toString();
+    return this._request(`/api/v2/tax/summary${qs ? `?${qs}` : ''}`);
+  }
+
+  async getTaxEntries(month?: number, year?: number): Promise<AnyRecord[]> {
+    const params = new URLSearchParams();
+    if (month) params.set('month', String(month));
+    if (year) params.set('year', String(year));
+    const qs = params.toString();
+    return this._request(`/api/v2/tax/entries${qs ? `?${qs}` : ''}`);
+  }
+
+  async recalculateTaxEntries(month?: number, year?: number): Promise<AnyRecord[]> {
+    const params = new URLSearchParams();
+    if (month) params.set('month', String(month));
+    if (year) params.set('year', String(year));
+    const qs = params.toString();
+    return this._request(`/api/v2/tax/entries/recalculate${qs ? `?${qs}` : ''}`, { method: 'POST' });
+  }
+
+  async createTaxEntry(data: AnyRecord): Promise<AnyRecord> {
+    return this._request('/api/v2/tax/entries', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateTaxEntry(id: string, data: AnyRecord): Promise<AnyRecord> {
+    return this._request(`/api/v2/tax/entries/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async payTaxEntry(id: string, data?: AnyRecord): Promise<AnyRecord> {
+    return this._request(`/api/v2/tax/entries/${encodeURIComponent(id)}/pay`, { method: 'POST', body: JSON.stringify(data ?? {}) });
+  }
+
+  async deleteTaxEntry(id: string): Promise<AnyRecord> {
+    return this._request(`/api/v2/tax/entries/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  // ─── Invoices & Companies ────────────────────────────
+
+  async getCompanies(): Promise<AnyRecord[]> {
+    return this._request('/api/v2/invoice/companies');
+  }
+
+  async getOwnCompany(): Promise<AnyRecord | null> {
+    return this._request('/api/v2/invoice/companies/own');
+  }
+
+  async createCompany(data: AnyRecord): Promise<AnyRecord> {
+    return this._request('/api/v2/invoice/companies', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateCompany(id: string, data: AnyRecord): Promise<AnyRecord> {
+    return this._request(`/api/v2/invoice/companies/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async deleteCompany(id: string): Promise<AnyRecord> {
+    return this._request(`/api/v2/invoice/companies/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async getInvoices(params?: { month?: number; year?: number; status?: string }): Promise<AnyRecord[]> {
+    const qs = new URLSearchParams();
+    if (params?.month) qs.set('month', String(params.month));
+    if (params?.year) qs.set('year', String(params.year));
+    if (params?.status) qs.set('status', params.status);
+    const q = qs.toString();
+    return this._request(`/api/v2/invoice/invoices${q ? `?${q}` : ''}`);
+  }
+
+  async getInvoice(id: string): Promise<AnyRecord> {
+    return this._request(`/api/v2/invoice/invoices/${encodeURIComponent(id)}`);
+  }
+
+  async getInvoiceStats(year?: number): Promise<AnyRecord> {
+    const qs = year ? `?year=${year}` : '';
+    return this._request(`/api/v2/invoice/invoices/stats${qs}`);
+  }
+
+  async getNextInvoiceNumber(type: string, issueDate: string): Promise<{ number: string }> {
+    return this._request(`/api/v2/invoice/invoices/next-number?type=${encodeURIComponent(type)}&issueDate=${encodeURIComponent(issueDate)}`);
+  }
+
+  async createInvoice(data: AnyRecord): Promise<AnyRecord> {
+    return this._request('/api/v2/invoice/invoices', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateInvoice(id: string, data: AnyRecord): Promise<AnyRecord> {
+    return this._request(`/api/v2/invoice/invoices/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async issueInvoice(id: string): Promise<AnyRecord> {
+    return this._request(`/api/v2/invoice/invoices/${encodeURIComponent(id)}/issue`, { method: 'POST', body: '{}' });
+  }
+
+  async markInvoicePaid(id: string, data?: AnyRecord): Promise<AnyRecord> {
+    return this._request(`/api/v2/invoice/invoices/${encodeURIComponent(id)}/pay`, { method: 'POST', body: JSON.stringify(data ?? {}) });
+  }
+
+  async deleteInvoice(id: string): Promise<AnyRecord> {
+    return this._request(`/api/v2/invoice/invoices/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async getInvoicePdfData(id: string): Promise<AnyRecord> {
+    return this._request(`/api/v2/invoice/invoices/${encodeURIComponent(id)}/pdf`);
+  }
+
+  // ─── Invoice Extensions ────────────────────────────
+
+  // Recurring invoices
+  async getRecurringInvoices(): Promise<AnyRecord[]> {
+    return this._request('/api/v2/invoice/recurring');
+  }
+
+  async getRecurringInvoice(id: string): Promise<AnyRecord> {
+    return this._request(`/api/v2/invoice/recurring/${encodeURIComponent(id)}`);
+  }
+
+  async createRecurringInvoice(data: AnyRecord): Promise<AnyRecord> {
+    return this._request('/api/v2/invoice/recurring', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateRecurringInvoice(id: string, data: AnyRecord): Promise<AnyRecord> {
+    return this._request(`/api/v2/invoice/recurring/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async deleteRecurringInvoice(id: string): Promise<AnyRecord> {
+    return this._request(`/api/v2/invoice/recurring/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async generateFromRecurring(id: string): Promise<AnyRecord> {
+    return this._request(`/api/v2/invoice/recurring/${encodeURIComponent(id)}/generate`, { method: 'POST', body: '{}' });
+  }
+
+  // Email
+  async getEmailConfig(): Promise<AnyRecord> {
+    return this._request('/api/v2/invoice/email/config');
+  }
+
+  async sendInvoiceEmail(id: string, data?: AnyRecord): Promise<AnyRecord> {
+    return this._request(`/api/v2/invoice/invoices/${encodeURIComponent(id)}/send`, { method: 'POST', body: JSON.stringify(data ?? {}) });
+  }
+
+  // Overdue
+  async checkOverdueInvoices(): Promise<AnyRecord> {
+    return this._request('/api/v2/invoice/invoices/check-overdue', { method: 'POST', body: '{}' });
+  }
+
+  // Currencies & exchange rates
+  async getAvailableCurrencies(): Promise<string[]> {
+    return this._request('/api/v2/invoice/currencies');
+  }
+
+  async getExchangeRate(currency: string, date?: string): Promise<AnyRecord> {
+    const qs = date ? `?date=${encodeURIComponent(date)}` : '';
+    return this._request(`/api/v2/invoice/exchange-rate/${encodeURIComponent(currency)}${qs}`);
+  }
+
+  // Audit log
+  async getInvoiceAuditLog(id: string): Promise<AnyRecord[]> {
+    return this._request(`/api/v2/invoice/invoices/${encodeURIComponent(id)}/audit`);
+  }
+
+  // Corrections
+  async createCorrectionInvoice(id: string): Promise<AnyRecord> {
+    return this._request(`/api/v2/invoice/invoices/${encodeURIComponent(id)}/correct`, { method: 'POST', body: '{}' });
+  }
+
+  // JPK_FA export
+  async exportJpkFa(dateFrom: string, dateTo: string): Promise<Blob> {
+    const resp = await fetch(`/api/v2/invoice/jpk-fa?dateFrom=${encodeURIComponent(dateFrom)}&dateTo=${encodeURIComponent(dateTo)}`, { credentials: 'include' });
+    if (!resp.ok) throw new Error('JPK_FA export failed');
+    return resp.blob();
+  }
+
+  // Chart data & revenue
+  async getInvoiceChartData(year?: number): Promise<AnyRecord> {
+    const qs = year ? `?year=${year}` : '';
+    return this._request(`/api/v2/invoice/chart-data${qs}`);
+  }
+
+  async getInvoiceRevenueSummary(year?: number): Promise<AnyRecord> {
+    const qs = year ? `?year=${year}` : '';
+    return this._request(`/api/v2/invoice/revenue-summary${qs}`);
+  }
+
+  // ─── Kanban ───────────────────────────────────────
+  async getKanbanConfig(): Promise<{
+    columns: Array<{
+      id: string;
+      name: string;
+      tagId: string;
+      objectTypes: Array<'bill' | 'expense' | 'fixed-expense' | 'receipt'>;
+    }>;
+  }> {
+    return this._request('/api/v2/kanban/config');
+  }
+
+  async updateKanbanConfig(data: AnyRecord): Promise<AnyRecord> {
+    return this._request('/api/v2/kanban/config', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async getKanbanBoard(): Promise<{
+    columns: Array<{
+      id: string;
+      name: string;
+      tagId: string;
+      tagName?: string | null;
+      objectTypes: Array<'bill' | 'expense' | 'fixed-expense' | 'receipt'>;
+      cards: Array<{
+        id: string;
+        objectType: 'bill' | 'expense' | 'fixed-expense' | 'receipt';
+        objectId: string;
+        title: string;
+        amount: number;
+        currency: string;
+        meta?: string;
+        cardBgColor?: string;
+        amountBgColor?: string;
+      }>;
+    }>;
+  }> {
+    return this._request('/api/v2/kanban/board');
+  }
+
+  async moveKanbanCard(data: {
+    objectType: 'bill' | 'expense' | 'fixed-expense' | 'receipt';
+    objectId: string;
+    fromTagId?: string;
+    toTagId: string;
+  }): Promise<{ message: string }> {
+    return this._request('/api/v2/kanban/move', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async getKanbanCard(objectType: 'bill' | 'expense' | 'fixed-expense' | 'receipt', objectId: string): Promise<AnyRecord> {
+    const params = new URLSearchParams({ objectType, objectId });
+    return this._request(`/api/v2/kanban/card?${params.toString()}`);
+  }
+
+  async updateKanbanCard(data: {
+    objectType: 'bill' | 'expense' | 'fixed-expense' | 'receipt';
+    objectId: string;
+    patch: Record<string, unknown>;
+  }): Promise<{ message: string }> {
+    return this._request('/api/v2/kanban/card', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  // ─── Split (Expense Sharing) ──────────────────────
+
+  async getSplitPreview(code: string): Promise<ISplitPreview> {
+    return this._request(`/api/v2/splits/join/${encodeURIComponent(code)}`, { suppressErrorToast: true });
+  }
+
+  async joinSplit(code: string, data: { nickname: string; email?: string }, guestToken?: string): Promise<IJoinSplitResult> {
+    const headers: Record<string, string> = {};
+    if (guestToken) headers['X-Split-Token'] = guestToken;
+    return this._request(`/api/v2/splits/join/${encodeURIComponent(code)}`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+      headers,
+    });
+  }
+
+  async createSplit(data: { eventId: string; name: string; currency?: string }): Promise<ISplit> {
+    return this._request('/api/v2/splits', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async getSplitsForEvent(eventId: string): Promise<ISplit[]> {
+    return this._request(`/api/v2/splits/event/${encodeURIComponent(eventId)}`);
+  }
+
+  async getSplit(splitId: string, guestToken?: string): Promise<ISplit> {
+    const headers: Record<string, string> = {};
+    if (guestToken) headers['X-Split-Token'] = guestToken;
+    return this._request(`/api/v2/splits/${encodeURIComponent(splitId)}`, { headers });
+  }
+
+  async getSplitMessages(splitId: string, cursor?: string, guestToken?: string): Promise<ISplitMessage[]> {
+    const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+    const headers: Record<string, string> = {};
+    if (guestToken) headers['X-Split-Token'] = guestToken;
+    return this._request(`/api/v2/splits/${encodeURIComponent(splitId)}/messages${qs}`, { headers });
+  }
+
+  async sendSplitMessage(splitId: string, content: string, guestToken?: string): Promise<ISplitMessage> {
+    const headers: Record<string, string> = {};
+    if (guestToken) headers['X-Split-Token'] = guestToken;
+    return this._request(`/api/v2/splits/${encodeURIComponent(splitId)}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+      headers,
+      notifySuccess: false,
+    });
+  }
+
+  async createSplitReceipt(splitId: string, data: AnyRecord, guestToken?: string): Promise<AnyRecord> {
+    const headers: Record<string, string> = {};
+    if (guestToken) headers['X-Split-Token'] = guestToken;
+    return this._request(`/api/v2/splits/${encodeURIComponent(splitId)}/receipts`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+      headers,
+    });
+  }
+
+  async updateSplitReceipt(splitId: string, receiptId: string, data: AnyRecord, guestToken?: string): Promise<AnyRecord> {
+    const headers: Record<string, string> = {};
+    if (guestToken) headers['X-Split-Token'] = guestToken;
+    return this._request(`/api/v2/splits/${encodeURIComponent(splitId)}/receipts/${encodeURIComponent(receiptId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+      headers,
+    });
+  }
+
+  async claimSplitItem(splitId: string, splitReceiptItemId: string, guestToken?: string): Promise<AnyRecord> {
+    const headers: Record<string, string> = {};
+    if (guestToken) headers['X-Split-Token'] = guestToken;
+    return this._request(`/api/v2/splits/${encodeURIComponent(splitId)}/claims`, {
+      method: 'POST',
+      body: JSON.stringify({ splitReceiptItemId }),
+      headers,
+      notifySuccess: false,
+    });
+  }
+
+  async unclaimSplitItem(splitId: string, itemId: string, guestToken?: string): Promise<void> {
+    const headers: Record<string, string> = {};
+    if (guestToken) headers['X-Split-Token'] = guestToken;
+    await this._request(`/api/v2/splits/${encodeURIComponent(splitId)}/claims/${encodeURIComponent(itemId)}`, {
+      method: 'DELETE',
+      headers,
+      notifySuccess: false,
+    });
+  }
+
+  async getSplitSummary(splitId: string, guestToken?: string): Promise<ISplitSummary> {
+    const headers: Record<string, string> = {};
+    if (guestToken) headers['X-Split-Token'] = guestToken;
+    return this._request(`/api/v2/splits/${encodeURIComponent(splitId)}/summary`, { headers });
+  }
+
+  async generateSplitSummary(splitId: string, guestToken?: string): Promise<ISplitSummary> {
+    const headers: Record<string, string> = {};
+    if (guestToken) headers['X-Split-Token'] = guestToken;
+    return this._request(`/api/v2/splits/${encodeURIComponent(splitId)}/summary`, {
+      method: 'POST',
+      headers,
+    });
+  }
+
+  async markSplitSettled(splitId: string, guestToken?: string): Promise<{ participant: AnyRecord; isArchived: boolean }> {
+    const headers: Record<string, string> = {};
+    if (guestToken) headers['X-Split-Token'] = guestToken;
+    return this._request(`/api/v2/splits/${encodeURIComponent(splitId)}/settle`, {
+      method: 'POST',
+      headers,
+    });
+  }
+
+  async unmarkSplitSettled(splitId: string, guestToken?: string): Promise<AnyRecord> {
+    const headers: Record<string, string> = {};
+    if (guestToken) headers['X-Split-Token'] = guestToken;
+    return this._request(`/api/v2/splits/${encodeURIComponent(splitId)}/settle`, {
+      method: 'DELETE',
+      headers,
+    });
   }
 }
 

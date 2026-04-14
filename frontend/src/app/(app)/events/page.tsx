@@ -27,11 +27,14 @@ import {
 import {
   Plus, Trash2, Edit2, MoreHorizontal, CalendarDays, MapPin, ArrowLeft,
   ShoppingCart, ListTodo, StickyNote, Receipt, Copy, Search, ChevronDown,
-  Clock, CheckCircle2, XCircle, AlertCircle, CircleDot,
+  Clock, CheckCircle2, XCircle, AlertCircle, CircleDot, Split,
 } from 'lucide-react';
+import { toastError, toastSuccess, toastInfo } from '@/lib/toast';
+import { useAuth } from '@/lib/auth-context';
+import { SplitWidget } from '@/components/Split';
 import type {
   IEvent, IEventItem, IEventTodo, IEventNote, IEventExpense, IEventStats,
-  EventStatus, EventItemStatus, TodoPriority,
+  EventStatus, EventItemStatus, TodoPriority, ISplit,
 } from '@shared/models';
 
 // ─── Helpers ──────────────────────────────────────────
@@ -125,7 +128,7 @@ function EventFormDialog({ open, onOpenChange, event, onSave }: {
       }
       onSave();
       onOpenChange(false);
-    } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Błąd'); }
+    } catch (e: unknown) { toastError(e instanceof Error ? e.message : 'Błąd'); }
     finally { setSaving(false); }
   };
 
@@ -224,7 +227,7 @@ function EventCard({ event, onClick, onEdit, onDuplicate, onDelete }: {
       <CardContent className="p-4">
         <div className="flex items-start justify-between mb-2">
           <div className="flex items-center gap-2 min-w-0">
-            {event.icon && <span className="text-xl flex-shrink-0">{event.icon}</span>}
+            {event.icon && <span className="text-xl shrink-0">{event.icon}</span>}
             <div className="min-w-0">
               <h3 className="font-semibold truncate">{event.name}</h3>
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -234,7 +237,7 @@ function EventCard({ event, onClick, onEdit, onDuplicate, onDelete }: {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
             <Badge variant="outline" className={cfg.color}>
               <StatusIcon className="h-3 w-3 mr-1" />
               {cfg.label}
@@ -985,7 +988,7 @@ function EventDetailView({ event, categories, members, onBack, onReload, onEdit 
 
       {/* Tabs */}
       <Tabs defaultValue="shopping" className="w-full">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="shopping" className="gap-1.5">
             <ShoppingCart className="h-4 w-4" />
             <span className="hidden sm:inline">Zakupy</span>
@@ -1014,6 +1017,10 @@ function EventDetailView({ event, categories, members, onBack, onReload, onEdit 
               <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">{event.expenses?.length}</Badge>
             )}
           </TabsTrigger>
+          <TabsTrigger value="split" className="gap-1.5">
+            <Split className="h-4 w-4" />
+            <span className="hidden sm:inline">Split</span>
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="shopping" className="mt-4">
@@ -1028,7 +1035,124 @@ function EventDetailView({ event, categories, members, onBack, onReload, onEdit 
         <TabsContent value="expenses" className="mt-4">
           <ExpensesTab event={event} categories={categories} members={members} onReload={onReload} />
         </TabsContent>
+        <TabsContent value="split" className="mt-4">
+          <SplitTab eventId={event.id} />
+        </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// SPLIT TAB
+// ═══════════════════════════════════════════════════════
+
+function SplitTab({ eventId }: { eventId: string }) {
+  const { user } = useAuth();
+  const [splits, setSplits] = useState<ISplit[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [activeSplitId, setActiveSplitId] = useState<string | null>(null);
+  const [newSplitName, setNewSplitName] = useState('');
+
+  useEffect(() => {
+    loadSplits();
+  }, [eventId]);
+
+  const loadSplits = async () => {
+    setLoading(true);
+    try {
+      const data = await api.getSplitsForEvent(eventId);
+      setSplits(data);
+    } catch {
+      // No access or no splits
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreate = async () => {
+    if (!newSplitName.trim()) return;
+    setCreating(true);
+    try {
+      const split = await api.createSplit({ eventId, name: newSplitName.trim() });
+      setSplits((prev) => [...prev, split]);
+      setActiveSplitId(split.id);
+      setNewSplitName('');
+      toastSuccess('Split utworzony');
+    } catch {
+      toastError('Nie udało się utworzyć Splita');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  if (activeSplitId) {
+    return (
+      <div className="relative min-h-[400px]">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setActiveSplitId(null)}
+          className="mb-2"
+        >
+          <ArrowLeft className="h-4 w-4 mr-1" /> Wróć do listy
+        </Button>
+        <SplitWidget
+          splitId={activeSplitId}
+          userId={user?.id}
+          onClose={() => setActiveSplitId(null)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Create new split */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex gap-2">
+            <Input
+              value={newSplitName}
+              onChange={(e) => setNewSplitName(e.target.value)}
+              placeholder="Nazwa nowego splita, np. Wydatki na grill"
+              onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
+            />
+            <Button onClick={handleCreate} disabled={creating || !newSplitName.trim()}>
+              <Plus className="h-4 w-4 mr-1" /> Utwórz Split
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Splits list */}
+      {loading ? (
+        <div className="text-center py-8 text-muted-foreground text-sm">Ładowanie…</div>
+      ) : splits.length === 0 ? (
+        <div className="text-center py-8 text-muted-foreground text-sm">
+          Brak splitów — utwórz pierwszy, aby dzielić wydatki z uczestnikami
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {splits.map((s) => (
+            <Card key={s.id} className="cursor-pointer hover:bg-muted/30 transition-colors" onClick={() => setActiveSplitId(s.id)}>
+              <CardContent className="p-3 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Split className="h-4 w-4 text-primary" />
+                  <span className="font-medium text-sm">{s.name}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant={s.status === 'ACTIVE' ? 'default' : 'secondary'} className="text-xs">
+                    {s.status === 'ACTIVE' ? 'Aktywny' : s.status === 'SETTLED' ? 'Rozliczony' : 'Zarchiwizowany'}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">{s.participants?.length ?? 0} os.</span>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1110,7 +1234,7 @@ export default function EventsPage() {
   // Detail view
   if (selectedEvent) {
     return (
-      <div className="p-6 max-w-5xl mx-auto">
+      <div className="max-w-5xl mx-auto">
         <EventDetailView
           event={selectedEvent}
           categories={categories}
@@ -1125,7 +1249,7 @@ export default function EventsPage() {
 
   // List view
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
+    <div className="max-w-5xl mx-auto space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -1175,7 +1299,7 @@ export default function EventsPage() {
 
       {/* Filters */}
       <div className="flex gap-3 flex-wrap">
-        <div className="relative flex-1 min-w-[200px]">
+        <div className="relative flex-1 min-w-50">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Szukaj wydarzeń..."
             className="pl-10" />

@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, IsDateString, IsInt, IsEnum, IsBoolean } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsDateString, IsInt, IsEnum, IsBoolean, IsObject } from 'class-validator';
 
 enum Frequency {
   DAILY = 'DAILY',
@@ -38,6 +38,10 @@ export class UpdateFixedExpenseDto {
   endDate?: string;
 
   @IsOptional()
+  @IsDateString()
+  nextDueDate?: string;
+
+  @IsOptional()
   @IsString()
   categoryId?: string;
 
@@ -48,6 +52,14 @@ export class UpdateFixedExpenseDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsOptional()
+  @IsString()
+  paymentTagId?: string;
+
+  @IsOptional()
+  @IsObject()
+  paymentTemplateData?: Record<string, unknown>;
 
   @IsOptional()
   @IsBoolean()

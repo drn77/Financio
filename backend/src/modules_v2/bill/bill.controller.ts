@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { SessionAuthGuard } from '../../shared/guards/auth.guard';
-import { FamilyId } from '../../shared/decorators/session.decorator';
+import { FamilyId, UserId } from '../../shared/decorators/session.decorator';
 import { BillContextService } from './bill-context.service';
 import { CreateBillDto } from './dto/create-bill.dto';
 import { UpdateBillDto } from './dto/update-bill.dto';
@@ -24,6 +24,11 @@ export class BillController {
   @Get('stats')
   async getBillStats(@FamilyId() familyId: string) {
     return this.billContext.getBillStats(familyId);
+  }
+
+  @Post('sync-auto-expenses')
+  async syncAutoExpenses(@FamilyId() familyId: string) {
+    return this.billContext.syncAutoExpensesForCurrentPeriod(familyId);
   }
 
   @Get(':id')
@@ -60,10 +65,11 @@ export class BillController {
   @Post(':id/pay')
   async payBill(
     @FamilyId() familyId: string,
+    @UserId() userId: string,
     @Param('id') id: string,
     @Body() input: PayBillDto,
   ) {
-    return this.billContext.payBill(id, familyId, input);
+    return this.billContext.payBill(id, familyId, userId, input);
   }
 
   @Delete(':id/payments/:paymentId')
@@ -72,7 +78,7 @@ export class BillController {
     @Param('id') id: string,
     @Param('paymentId') paymentId: string,
   ) {
-    await this.billContext.deleteBillPayment(id, paymentId, familyId);
+    await this.billContext.deleteBillPayment(paymentId, id, familyId);
     return { message: 'Payment deleted successfully' };
   }
 }

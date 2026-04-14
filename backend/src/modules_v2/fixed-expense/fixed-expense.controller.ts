@@ -4,6 +4,7 @@ import { FamilyId } from '../../shared/decorators/session.decorator';
 import { FixedExpenseContextService } from './fixed-expense-context.service';
 import { CreateFixedExpenseDto } from './dto/create-fixed-expense.dto';
 import { UpdateFixedExpenseDto } from './dto/update-fixed-expense.dto';
+import { PayFixedExpenseDto } from './dto/pay-fixed-expense.dto';
 
 @Controller('v2/fixed-expenses')
 @UseGuards(SessionAuthGuard)
@@ -13,6 +14,11 @@ export class FixedExpenseController {
   @Get()
   async getFixedExpenses(@FamilyId() familyId: string) {
     return this.fixedExpenseContext.getFixedExpenses(familyId);
+  }
+
+  @Get(':id')
+  async getFixedExpense(@FamilyId() familyId: string, @Param('id') id: string) {
+    return this.fixedExpenseContext.getFixedExpense(id, familyId);
   }
 
   @Post()
@@ -27,6 +33,15 @@ export class FixedExpenseController {
     @Body() input: UpdateFixedExpenseDto,
   ) {
     return this.fixedExpenseContext.updateFixedExpense(id, familyId, input);
+  }
+
+  @Post(':id/pay')
+  async payFixedExpense(
+    @FamilyId() familyId: string,
+    @Param('id') id: string,
+    @Body() input: PayFixedExpenseDto,
+  ) {
+    return this.fixedExpenseContext.payFixedExpense(id, familyId, input);
   }
 
   @Delete(':id')

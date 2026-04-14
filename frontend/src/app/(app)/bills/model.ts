@@ -4,27 +4,32 @@ export interface IBillFormData {
   name: string;
   amount: string;
   dueDay: string;
+  paymentStartDate: string;
+  paymentEndDate: string;
   frequency: Frequency;
-  categoryId: string;
   notes: string;
   paymentType: PaymentType;
   autoCreateExpense: boolean;
   reminderDays: string;
   budgetLimit: string;
+  savingsGoalId: string;
   tagIds: string[];
+  tagBeforePaymentId: string;
+  tagAfterPaymentId: string;
 }
 
 export interface ITagOption {
   id: string;
   name: string;
   color: string;
+  icon?: string | null;
   groupName: string;
+  tagGroupId: string;
 }
 
 export interface IFilterState {
   status: BillStatus | 'ALL';
   tagIds: string[];
-  categoryId: string;
   search: string;
 }
 
@@ -32,14 +37,18 @@ export const EMPTY_FORM: IBillFormData = {
   name: '',
   amount: '',
   dueDay: '',
+  paymentStartDate: '',
+  paymentEndDate: '',
   frequency: 'MONTHLY',
-  categoryId: '',
   notes: '',
   paymentType: 'MANUAL',
   autoCreateExpense: false,
   reminderDays: '3',
   budgetLimit: '',
+  savingsGoalId: '',
   tagIds: [],
+  tagBeforePaymentId: '',
+  tagAfterPaymentId: '',
 };
 
 export type SortField = 'name' | 'amount' | 'dueDay' | 'status';

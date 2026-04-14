@@ -12,7 +12,7 @@ export class ColumnDefinitionDto {
 
   @IsString()
   @IsNotEmpty()
-  type!: string; // 'text'|'number'|'date'|'checkbox'|'select'|'tags'|'currency'|'person'|'tag_group'
+  type!: string; // 'text'|'number'|'date'|'checkbox'|'select'|'tag_group'|'currency'|'person'
 
   @IsBoolean()
   required!: boolean;
@@ -46,6 +46,18 @@ export class ColumnDefinitionDto {
   @IsOptional()
   @IsString()
   defaultValue?: string;
+
+  @IsOptional()
+  @IsString()
+  colorFieldByTag?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  colorRowByTag?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  allowMultiple?: boolean;
 }
 
 export class CreateTemplateDto {
@@ -69,4 +81,7 @@ export class CreateTemplateDto {
   @IsOptional()
   @IsBoolean()
   isDefault?: boolean;
+
+  @IsOptional()
+  billingPeriod?: Record<string, any>;
 }

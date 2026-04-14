@@ -27,7 +27,11 @@ export class RecordActionsService {
       search?: string;
     },
   ): Promise<{ records: TemplateRecord[]; total: number }> {
-    const where: Prisma.TemplateRecordWhereInput = { templateId };
+    const where: Prisma.TemplateRecordWhereInput = {
+      templateId,
+      // Exclude soft-deleted auto-expense tombstones from regular queries
+      NOT: { data: { path: ['_autoExpenseDeleted'], equals: true } as any },
+    };
 
     const [records, total] = await Promise.all([
       this.prisma.templateRecord.findMany({
@@ -46,6 +50,60 @@ export class RecordActionsService {
     return this.prisma.templateRecord.findFirst({
       where: { id, templateId },
     });
+  }
+
+  async findBillAutoExpenseRecordByOccurrence(
+    templateId: string,
+    billId: string,
+    occurrenceDateIso: string,
+  ): Promise<TemplateRecord | null> {
+    return this.prisma.templateRecord.findFirst({
+      where: {
+        templateId,
+        AND: [
+          { data: { path: ['_billId'], equals: billId } as any },
+          {
+            OR: [
+              { data: { path: ['_billOccurrenceDate'], equals: occurrenceDateIso } as any },
+              { data: { path: ['col_date'], equals: occurrenceDateIso } as any },
+            ],
+          },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async findAutoExpenseRecordCandidates(
+    familyId: string,
+    billId: string,
+    amount: number,
+    dateIso: string,
+  ): Promise<TemplateRecord[]> {
+    return this.prisma.templateRecord.findMany({
+      where: {
+        template: { familyId },
+        AND: [
+          { data: { path: ['_billId'], equals: billId } as any },
+          { data: { path: ['col_type'], equals: 'Wydatek' } as any },
+          { data: { path: ['col_amount', 'amount'], equals: amount } as any },
+          { data: { path: ['col_date'], equals: dateIso } as any },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+    });
+  }
+
+  async deleteAutoExpenseRecordsByBillPaymentId(familyId: string, paymentId: string): Promise<number> {
+    const result = await this.prisma.templateRecord.deleteMany({
+      where: {
+        template: { familyId },
+        data: { path: ['_billPaymentId'], equals: paymentId } as any,
+      },
+    });
+
+    return result.count;
   }
 
   async getMaxSortOrder(templateId: string): Promise<number> {
@@ -71,20 +129,59 @@ export class RecordActionsService {
     deletedIds?: string[],
   ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
-      // Delete removed records
+      // Track soft-deleted IDs so the upsert loop below skips them.
+      const softDeleteIds: string[] = [];
+
+      // Handle deleted records — soft-delete auto-expense rows (those with
+      // _billId) so the sync logic doesn't recreate them, hard-delete the rest.
       if (deletedIds?.length) {
-        await tx.templateRecord.deleteMany({
+        const toDelete = await tx.templateRecord.findMany({
           where: { id: { in: deletedIds }, templateId },
+          select: { id: true, data: true },
         });
+
+        const hardDeleteIds: string[] = [];
+
+        for (const rec of toDelete) {
+          const recData = (rec.data as Record<string, any>) ?? {};
+          if (recData._billId) {
+            softDeleteIds.push(rec.id);
+          } else {
+            hardDeleteIds.push(rec.id);
+          }
+        }
+
+        if (hardDeleteIds.length) {
+          await tx.templateRecord.deleteMany({
+            where: { id: { in: hardDeleteIds }, templateId },
+          });
+        }
+
+        for (const id of softDeleteIds) {
+          const existing = toDelete.find((r: { id: string; data: any }) => r.id === id);
+          const existingData = (existing?.data as Record<string, any>) ?? {};
+          await tx.templateRecord.update({
+            where: { id },
+            data: { data: { ...existingData, _autoExpenseDeleted: true } },
+          });
+        }
       }
 
-      // Upsert records
+      // Upsert records — skip any that were just soft-deleted above.
       for (const record of records) {
+        // Strip the client-side nonce used for new-row matching.
+        // For existing rows it must never reach the DB.
+        // For new rows the nonce is kept in the DB briefly so the
+        // response (via findRecordsByTemplate) echoes it back for
+        // client-side matching; the client strips it from local state
+        // and the next save sends clean data.
+        const { _clientNonce, ...cleanData } = (record.data ?? {}) as Record<string, any>;
+
         if (record.id) {
           await tx.templateRecord.update({
             where: { id: record.id },
             data: {
-              data: record.data,
+              data: cleanData,
               ...(record.sortOrder !== undefined && { sortOrder: record.sortOrder }),
             },
           });

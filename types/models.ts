@@ -1,4 +1,4 @@
-export type ColumnType = 'text' | 'number' | 'date' | 'checkbox' | 'select' | 'tags' | 'currency' | 'person';
+export type ColumnType = 'text' | 'number' | 'date' | 'checkbox' | 'select' | 'tag_group' | 'currency' | 'person';
 
 export type DefaultBehavior =
   | 'empty'
@@ -107,14 +107,21 @@ export interface IBill {
   amount: number;
   currency: string;
   dueDay: number;
+  paymentStartDate: string;
+  paymentEndDate: string | null;
   frequency: Frequency;
-  categoryId: string | null;
   notes: string | null;
   isActive: boolean;
   paymentType: PaymentType;
   autoCreateExpense: boolean;
   reminderDays: number;
   budgetLimit: number | null;
+  tagBeforePaymentId: string | null;
+  tagAfterPaymentId: string | null;
+  savingsGoalId: string | null;
+  savingsGoal: { id: string; name: string } | null;
+  tagBeforePayment: IBillTag | null;
+  tagAfterPayment: IBillTag | null;
   tags: IBillTag[];
   payments: IBillPayment[];
   nextDueDate?: string;
@@ -165,6 +172,11 @@ export interface IReceipt {
   personId: string | null;
   imageUrl: string | null;
   notes: string | null;
+  configurableFields?: Record<string, unknown> | null;
+  ocrStatus: 'PENDING' | 'COMPLETED' | 'FAILED';
+  ocrError: string | null;
+  isApproved: boolean;
+  approvedAt: string | null;
   items: IReceiptItem[];
   tags: IReceiptTag[];
   createdAt: string;
@@ -247,6 +259,9 @@ export interface ISavingsGoal {
   icon: string | null;
   color: string;
   progress: number;
+  autoCreateExpense: boolean;
+  paymentTagId: string | null;
+  paymentTemplateData: Record<string, any> | null;
 }
 
 export interface ISavingsDeposit {
@@ -266,6 +281,46 @@ export interface IDashboardData {
   recentTransactions: ITemplateRecord[];
   expensesByCategory: { category: string; color: string; amount: number }[];
   expensesByPerson: { person: string; amount: number }[];
+}
+
+// ─── Billing Periods ────────────────────────────────
+
+export type BillingPeriodType = 'DAY' | 'WEEK' | 'MONTH' | 'QUARTER' | 'HALF_YEAR' | 'YEAR';
+
+export interface IBillingPeriodConfig {
+  type: BillingPeriodType;
+  resetHour?: number;        // DAY → hour (0-23)
+  resetDayOfWeek?: number;   // WEEK → 1(Mon)-7(Sun)
+  resetDayOfMonth?: number;  // MONTH → 1-31
+  resetMonth?: number;       // QUARTER, HALF_YEAR, YEAR → 1-12
+  resetDay?: number;         // QUARTER, HALF_YEAR, YEAR → 1-31
+  budgetAmount?: number;     // Optional budget per period
+}
+
+export interface IBillingPeriodOverride {
+  id: string;
+  templateId: string;
+  periodStart: string;
+  overrideResetDate: string;
+  createdAt: string;
+}
+
+export interface IBillingPeriodInfo {
+  periodStart: string;   // ISO date
+  periodEnd: string;     // ISO date (next reset)
+  nextReset: string;     // ISO date
+  progress: number;      // 0-1 how far through the period
+  daysTotal: number;
+  daysRemaining: number;
+  isOverridden: boolean;
+}
+
+export interface IPeriodHistoryEntry {
+  periodStart: string;
+  periodEnd: string;
+  totalAmount: number;
+  recordCount: number;
+  budgetAmount?: number;
 }
 
 // ─── Events ─────────────────────────────────────────
@@ -369,4 +424,105 @@ export interface IEventStats {
   totalBudget: number;
   totalSpent: number;
   upcomingCount: number;
+}
+
+// ─── Split (Expense Sharing) ────────────────────────
+
+export type SplitStatus = 'ACTIVE' | 'SETTLED' | 'ARCHIVED';
+
+export interface ISplitParticipant {
+  id: string;
+  splitId: string;
+  userId: string | null;
+  nickname: string;
+  email: string | null;
+  isAdmin: boolean;
+  isSettled: boolean;
+  createdAt: string;
+}
+
+export interface ISplitItemClaim {
+  id: string;
+  splitReceiptItemId: string;
+  participantId: string;
+  participant: ISplitParticipant;
+  createdAt: string;
+}
+
+export interface ISplitReceiptItem {
+  id: string;
+  splitReceiptId: string;
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  total: number;
+  sortOrder: number;
+  claims: ISplitItemClaim[];
+}
+
+export interface ISplitReceipt {
+  id: string;
+  splitId: string;
+  uploadedByParticipantId: string;
+  paidByParticipantId: string;
+  paidBy: ISplitParticipant;
+  imageUrl: string | null;
+  storeName: string | null;
+  totalAmount: number;
+  isConfirmed: boolean;
+  ocrRawText: string | null;
+  items: ISplitReceiptItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ISplitMessage {
+  id: string;
+  splitId: string;
+  participantId: string;
+  participant: ISplitParticipant;
+  content: string | null;
+  type: 'TEXT' | 'RECEIPT';
+  splitReceiptId: string | null;
+  createdAt: string;
+}
+
+export interface ISplit {
+  id: string;
+  eventId: string;
+  inviteCode: string;
+  name: string;
+  currency: string;
+  status: SplitStatus;
+  participants: ISplitParticipant[];
+  messages: ISplitMessage[];
+  receipts: ISplitReceipt[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ISplitSettlement {
+  fromParticipantId: string;
+  fromNickname: string;
+  toParticipantId: string;
+  toNickname: string;
+  amount: number;
+}
+
+export interface ISplitSummary {
+  settlements: ISplitSettlement[];
+  participants: ISplitParticipant[];
+}
+
+export interface ISplitPreview {
+  id: string;
+  name: string;
+  status: SplitStatus;
+  participantCount: number;
+}
+
+export interface IJoinSplitResult {
+  participant: ISplitParticipant;
+  guestToken: string | null;
+  split: ISplit;
 }
