@@ -100,6 +100,8 @@ interface RecordRow {
   createdAt?: string;
   isNew?: boolean;
   isDirty?: boolean;
+  /** Temporary client-side identifier used to match new rows with server responses after save. */
+  _clientNonce?: string;
 }
 
 type SortDir = 'asc' | 'desc' | null;
@@ -160,6 +162,8 @@ export default function ExpensesPage() {
   const [csvImportOpen, setCSVImportOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<{ rowIndex: number } | null>(null);
   const hasUnsaved = useRef(false);
+  const saveInFlightRef = useRef(false);
+  const saveAbortRef = useRef<AbortController | null>(null);
   const deletedIdsRef = useRef<string[]>([]);
   const allRecordsRef = useRef<RecordRow[]>([]);
   const templateIdRef = useRef<string | null>(null);
@@ -181,11 +185,18 @@ export default function ExpensesPage() {
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current = setTimeout(() => {
       saveAllRef.current();
-    }, 500);
+    }, 20_000);
   }, []);
 
   const flushPendingChanges = useCallback(async (mode: 'normal' | 'keepalive' = 'normal') => {
-    if (!hasUnsaved.current) return;
+    // If a save is in flight, abort it first so the keepalive replaces it
+    // rather than racing (which would create duplicate new rows).
+    if (saveInFlightRef.current && mode === 'keepalive') {
+      saveAbortRef.current?.abort();
+      saveInFlightRef.current = false;
+    } else if (!hasUnsaved.current && !saveInFlightRef.current) {
+      return;
+    }
 
     const templateId = templateIdRef.current;
     if (!templateId) return;
@@ -234,7 +245,7 @@ export default function ExpensesPage() {
     };
 
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (!hasUnsaved.current) return;
+      if (!hasUnsaved.current && !saveInFlightRef.current) return;
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
       void flushPendingChanges('keepalive');
       event.preventDefault();
@@ -325,11 +336,12 @@ export default function ExpensesPage() {
       }
 
       const result = await api.getRecords(tmpl.id, 1, 500);
-      const rows: RecordRow[] = (result.records ?? []).map((r: any) => ({
-        id: r.id,
-        data: r.data,
-        createdAt: r.createdAt,
-      }));
+      const rows: RecordRow[] = (result.records ?? []).map((r: any) => {
+        // Strip transient _clientNonce that may still be in the DB for
+        // recently-created rows (cleaned on next save).
+        const { _clientNonce: _, ...cleanData } = r.data ?? {};
+        return { id: r.id, data: cleanData, createdAt: r.createdAt };
+      });
       setAllRecords(sortRecordsByCreatedAtDesc(rows));
     } catch (e) {
       console.error('Failed to load expenses:', e);
@@ -459,6 +471,7 @@ export default function ExpensesPage() {
       createdAt: new Date().toISOString(),
       isNew: true,
       isDirty: true,
+      _clientNonce: crypto.randomUUID(),
     }, ...prev]);
     hasUnsaved.current = true;
     setPage(1);
@@ -475,7 +488,8 @@ export default function ExpensesPage() {
       return copy;
     });
     hasUnsaved.current = true;
-  }, []);
+    triggerAutoSave();
+  }, [triggerAutoSave]);
 
   const removeRow = useCallback((globalIndex: number) => {
     setAllRecords((prev) => {
@@ -505,6 +519,7 @@ export default function ExpensesPage() {
           createdAt: new Date().toISOString(),
           isNew: true,
           isDirty: true,
+          _clientNonce: crypto.randomUUID(),
         }, ...prev];
       });
       hasUnsaved.current = true;
@@ -530,35 +545,97 @@ export default function ExpensesPage() {
   const saveAll = useCallback(async () => {
     if (!template || !hasUnsaved.current) return;
     setSaveStatus('saving');
+
+    // Snapshot the latest state from refs so we always send the most
+    // up-to-date data, even if React hasn't re-rendered yet.
+    const currentRecords = allRecordsRef.current;
+    const deletedIds = [...deletedIdsRef.current];
+
+    // Optimistically mark as saved. If the user edits another cell while
+    // the request is in flight, updateCell / removeRow will flip it back.
+    hasUnsaved.current = false;
+    deletedIdsRef.current = [];
+    saveInFlightRef.current = true;
+
     try {
-      const toSend = allRecords.map((r, i) => ({
+      // Tag each id-less row with its client nonce so we can match server
+      // responses back to the correct local row after the save.
+      const sentNonces = new Set(
+        currentRecords.filter((r) => !r.id && r._clientNonce).map((r) => r._clientNonce as string),
+      );
+
+      const toSend = currentRecords.map((r, i) => ({
         id: r.id,
-        data: r.data,
+        data: r.id ? r.data : { ...r.data, _clientNonce: r._clientNonce },
         sortOrder: i,
       }));
-      const deletedIds = deletedIdsRef.current;
 
-      await api.bulkUpdateRecords(template.id, toSend, deletedIds);
-      hasUnsaved.current = false;
-      deletedIdsRef.current = [];
+      // The endpoint returns the full record list (with server-generated IDs).
+      const abortCtrl = new AbortController();
+      saveAbortRef.current = abortCtrl;
+      const serverRecords: any[] = await api.bulkUpdateRecords(template.id, toSend, deletedIds, abortCtrl.signal);
+      saveAbortRef.current = null;
+      saveInFlightRef.current = false;
 
-      const result = await api.getRecords(template.id, 1, 500);
-      setAllRecords(sortRecordsByCreatedAtDesc(
-        (result.records ?? []).map((r: any) => ({
-          id: r.id,
-          data: r.data,
-          createdAt: r.createdAt,
-        })),
-      ));
+      // Strip _clientNonce from server response data to prevent DB pollution.
+      const cleanServerRecords = serverRecords.map((r: any) => {
+        const { _clientNonce: nonce, ...cleanData } = r.data ?? {};
+        return { ...r, data: cleanData, _nonce: nonce };
+      });
+
+      // Merge server data with local state:
+      // - If no new edits arrived during the save, use the server snapshot
+      //   (assigns IDs to new records, reflects any server-side changes).
+      // - If the user edited while we were saving, keep the local data for
+      //   dirty records and only patch IDs onto new rows.
+      setAllRecords((localRecords) => {
+        if (!hasUnsaved.current) {
+          // No concurrent edits — safe to accept server state.
+          return sortRecordsByCreatedAtDesc(
+            cleanServerRecords.map((r: any) => ({ id: r.id, data: r.data, createdAt: r.createdAt })),
+          );
+        }
+
+        // Concurrent edits happened — match by client nonce to assign the
+        // correct server ID to each row that was part of this save.
+        const serverByNonce = new Map<string, any>();
+        for (const sr of cleanServerRecords) {
+          if (sr._nonce) serverByNonce.set(sr._nonce, sr);
+        }
+
+        return localRecords.map((r) => {
+          if (r.id) return r; // existing row — keep local (possibly dirty) data
+          const nonce = r._clientNonce as string | undefined;
+          if (nonce && sentNonces.has(nonce)) {
+            const sr = serverByNonce.get(nonce);
+            if (sr) {
+              return { ...r, id: sr.id, createdAt: sr.createdAt, isNew: false, _clientNonce: undefined };
+            }
+          }
+          return r; // row added concurrently — leave as-is for next save
+        });
+      });
+
       window.dispatchEvent(new Event('financio:summary-refresh'));
       setSaveStatus('saved');
       if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
       savedTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
     } catch (e) {
+      saveAbortRef.current = null;
+      saveInFlightRef.current = false;
+      // If the request was aborted (e.g. by keepalive flush on unload),
+      // the keepalive already sent the data — don't restore unsaved flag.
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        setSaveStatus('idle');
+        return;
+      }
+      // Restore the unsaved flag so the next attempt includes these changes.
+      hasUnsaved.current = true;
+      deletedIdsRef.current = [...deletedIds, ...deletedIdsRef.current];
       console.error('Save failed:', e);
       setSaveStatus('idle');
     }
-  }, [allRecords, template]);
+  }, [template]);
   saveAllRef.current = saveAll;
 
   const exportCSV = useCallback(() => {

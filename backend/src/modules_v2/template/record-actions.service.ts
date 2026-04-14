@@ -169,12 +169,19 @@ export class RecordActionsService {
 
       // Upsert records — skip any that were just soft-deleted above.
       for (const record of records) {
-        if (record.id && softDeleteIds.includes(record.id)) continue;
+        // Strip the client-side nonce used for new-row matching.
+        // For existing rows it must never reach the DB.
+        // For new rows the nonce is kept in the DB briefly so the
+        // response (via findRecordsByTemplate) echoes it back for
+        // client-side matching; the client strips it from local state
+        // and the next save sends clean data.
+        const { _clientNonce, ...cleanData } = (record.data ?? {}) as Record<string, any>;
+
         if (record.id) {
           await tx.templateRecord.update({
             where: { id: record.id },
             data: {
-              data: record.data,
+              data: cleanData,
               ...(record.sortOrder !== undefined && { sortOrder: record.sortOrder }),
             },
           });
