@@ -1,4 +1,4 @@
-# fly.toml app configuration file generated for financio on 2026-03-06T09:26:02+01:00
+# fly.toml app configuration file generated for financio on 2026-03-11T07:03:08Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
@@ -7,26 +7,14 @@ app = 'financio'
 primary_region = 'ams'
 
 [build]
-  dockerfile = 'Dockerfile'
-
-[deploy]
-  release_command = "sh -lc 'DATABASE_URL=${MIGRATE_DATABASE_URL:-$DATABASE_URL} npx prisma migrate status'"
-
-[env]
-  BACKEND_PORT = '8080'
-  NODE_ENV = 'production'
 
 [http_service]
   internal_port = 8080
   force_https = true
   auto_stop_machines = 'stop'
   auto_start_machines = true
-  min_machines_running = 1
-
-  [http_service.concurrency]
-    type = 'connections'
-    hard_limit = 100
-    soft_limit = 80
+  min_machines_running = 0
+  processes = ['app']
 
   [[http_service.checks]]
     grace_period = '30s'
@@ -36,7 +24,7 @@ primary_region = 'ams'
     path = '/api/health'
 
 [[vm]]
-  size = 'shared-cpu-1x'
-  memory = '256mb'
+  memory = '1gb'
+  cpu_kind = 'shared'
   cpus = 1
   memory_mb = 256
